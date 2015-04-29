@@ -62,7 +62,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
 
   /**
    * The Connect message is sent to the SCTP manager actor, which is obtained via
-   * [[TcpExt#manager]]. Either the manager replies with a [[CommandFailed]]
+   * [[StcpExt#manager]]. Either the manager replies with a [[CommandFailed]]
    * or the actor handling the new connection replies with a [[Connected]]
    * message.
    *
@@ -78,7 +78,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
 
   /**
    * The Bind message is send to the SCTP manager actor, which is obtained via
-   * [[TcpExt#manager]] in order to bind to a listening socket. The manager
+   * [[StcpExt#manager]] in order to bind to a listening socket. The manager
    * replies either with a [[CommandFailed]] or the actor handling the listen
    * socket replies with a [[Bound]] message. If the local port is set to 0 in
    * the Bind message, then the [[Bound]] message should be inspected to find
@@ -97,7 +97,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    */
   final case class Bind(handler: ActorRef,
                         localAddress: InetSocketAddress,
-                        remoteAddresses: Set[InetAddress],
+                        remoteAddresses: Set[InetAddress] = Set.empty,
                         backlog: Int = 100,
                         options: immutable.Traversable[SctpSocketOption] = Nil,
                         pullMode: Boolean = false) extends Command
