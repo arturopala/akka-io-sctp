@@ -71,7 +71,7 @@ private[io] class SctpListener(selectorRouter: ActorRef,
 
   def receive: Receive = {
     case registration: ChannelRegistration ⇒
-      bindCommander ! Bound(localAddresses)
+      bindCommander ! Bound(localAddresses, localAddresses.head.getPort)
       context.become(bound(registration))
   }
 
@@ -79,10 +79,6 @@ private[io] class SctpListener(selectorRouter: ActorRef,
     case ChannelAcceptable ⇒
       acceptLimit = acceptAllPending(registration, acceptLimit)
       if (acceptLimit > 0) registration.enableInterest(SelectionKey.OP_ACCEPT)
-
-    case ResumeAccepting(batchSize) ⇒
-      acceptLimit = batchSize
-      registration.enableInterest(SelectionKey.OP_ACCEPT)
 
     case FailedRegisterIncoming(sctpChannel) ⇒
       log.warning("Could not register incoming connection since selector capacity limit is reached, closing connection")
@@ -111,7 +107,7 @@ private[io] class SctpListener(selectorRouter: ActorRef,
       log.debug("New connection accepted")
       sctpChannel.configureBlocking(false)
       def props(registry: ChannelRegistry) =
-        Props(classOf[SctpIncomingConnection], sctp, sctpChannel, registry, bind.handler, bind.options, false)
+        Props(classOf[SctpIncomingConnection], sctp, sctpChannel, registry, bind.handler, bind.options)
       selectorRouter ! WorkerForCommand(RegisterIncoming(sctpChannel), self, props)
       acceptAllPending(registration, limit - 1)
     } else BatchAcceptLimit

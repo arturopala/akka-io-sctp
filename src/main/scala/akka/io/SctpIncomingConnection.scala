@@ -15,9 +15,8 @@ private[io] class SctpIncomingConnection(_sctp: SctpExt,
                                         _channel: SctpChannel,
                                         registry: ChannelRegistry,
                                         bindHandler: ActorRef,
-                                        options: immutable.Traversable[SctpSocketOption],
-                                        readThrottling: Boolean)
-  extends SctpConnection(_sctp, _channel, readThrottling) {
+                                        options: immutable.Traversable[SctpSocketOption])
+  extends SctpConnection(_sctp, _channel) {
 
   context.watch(bindHandler) // sign death pact
 

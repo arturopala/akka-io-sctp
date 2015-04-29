@@ -4,7 +4,7 @@ import java.net.{ SocketException, InetSocketAddress }
 import java.nio.channels.SelectionKey._
 import java.io.{ FileInputStream, IOException }
 import java.nio.channels.{ FileChannel }
-import com.sun.nio.sctp.{ SctpChannel, SctpStandardSocketOptions }
+import com.sun.nio.sctp._
 import java.nio.ByteBuffer
 import scala.annotation.tailrec
 import scala.collection.immutable
@@ -16,13 +16,14 @@ import akka.io.SctpInet.SctpSocketOption
 import akka.io.Sctp._
 import akka.io.SelectionHandler._
 import akka.dispatch.{ UnboundedMessageQueueSemantics, RequiresMessageQueue }
+import akka.event.LoggingAdapter
 
 /**
  * Base class for SctpIncomingConnection and SctpOutgoingConnection.
  *
  * INTERNAL API
  */
-private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpChannel, val pullMode: Boolean)
+private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpChannel)
   extends Actor with ActorLogging with RequiresMessageQueue[UnboundedMessageQueueSemantics] {
 
   import sctp.Settings._
@@ -33,12 +34,13 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   private[this] var pendingWrite: PendingWrite = EmptyPendingWrite
   private[this] var peerClosed = false
   private[this] var writingSuspended = false
-  private[this] var readingSuspended = pullMode
   private[this] var interestedInResume: Option[ActorRef] = None
   var closedMessage: CloseInformation = _ // for ConnectionClosed message in postStop
   var isOutputShutdown = false
+  val assocHandler = new AssociationHandler()
 
   def writePending = pendingWrite ne EmptyPendingWrite
+  var association: Option[Association] = Option(channel.association)
 
   // STATES
 
@@ -55,17 +57,10 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
       val info = ConnectionInfo(registration, handler, keepOpenOnPeerClosed, useResumeWriting)
 
-      // if we have resumed reading from pullMode while waiting for Register then register OP_READ interest
-      if (pullMode && !readingSuspended) resumeReading(info)
-      doRead(info, None) // immediately try reading, pullMode is handled by readingSuspended
+      info.registration.disableInterest(OP_READ)
+      doRead(info, None) // immediately try reading
       context.setReceiveTimeout(Duration.Undefined)
       context.become(connected(info))
-
-    case ResumeReading ⇒
-      readingSuspended = false
-
-    case SuspendReading ⇒
-      readingSuspended = true
 
     case cmd: CloseCommand ⇒
       val info = ConnectionInfo(registration, commander, keepOpenOnPeerClosed = false, useResumeWriting = false)
@@ -81,8 +76,6 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   /** normal connected state */
   def connected(info: ConnectionInfo): Receive =
     handleWriteMessages(info) orElse {
-      case SuspendReading    ⇒ suspendReading(info)
-      case ResumeReading     ⇒ resumeReading(info)
       case ChannelReadable   ⇒ doRead(info, None)
       case cmd: CloseCommand ⇒ handleClose(info, Some(sender()), cmd.event)
     }
@@ -96,8 +89,6 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   /** connection is closing but a write has to be finished first */
   def closingWithPendingWrite(info: ConnectionInfo, closeCommander: Option[ActorRef],
                               closedEvent: ConnectionClosed): Receive = {
-    case SuspendReading  ⇒ suspendReading(info)
-    case ResumeReading   ⇒ resumeReading(info)
     case ChannelReadable ⇒ doRead(info, closeCommander)
 
     case ChannelWritable ⇒
@@ -118,8 +109,6 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   /** connection is closed on our side and we're waiting from confirmation from the other side */
   def closing(info: ConnectionInfo, closeCommander: Option[ActorRef]): Receive = {
-    case SuspendReading  ⇒ suspendReading(info)
-    case ResumeReading   ⇒ resumeReading(info)
     case ChannelReadable ⇒ doRead(info, closeCommander)
     case Abort           ⇒ handleClose(info, Some(sender()), Aborted)
   }
@@ -201,54 +190,48 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     context.become(waitingForRegistration(registration, commander))
   }
 
-  def suspendReading(info: ConnectionInfo): Unit = {
-    readingSuspended = true
-    info.registration.disableInterest(OP_READ)
-  }
-  def resumeReading(info: ConnectionInfo): Unit = {
-    readingSuspended = false
-    info.registration.enableInterest(OP_READ)
-  }
-
-  def doRead(info: ConnectionInfo, closeCommander: Option[ActorRef]): Unit = ()
-    /*if (!readingSuspended) {
-      @tailrec def innerRead(buffer: ByteBuffer, remainingLimit: Int): ReadResult =
-        if (remainingLimit > 0) {
-          // never read more than the configured limit
-          buffer.clear()
-          val maxBufferSpace = math.min(DirectBufferSize, remainingLimit)
-          buffer.limit(maxBufferSpace)
-          val readBytes = channel.read(buffer)
-          buffer.flip()
-
-          if (TraceLogging) log.debug("Read [{}] bytes.", readBytes)
-          if (readBytes > 0) info.handler ! Received(ByteString(buffer))
-
-          readBytes match {
-            case `maxBufferSpace` ⇒ if (pullMode) MoreDataWaiting else innerRead(buffer, remainingLimit - maxBufferSpace)
-            case x if x >= 0      ⇒ AllRead
-            case -1               ⇒ EndOfStream
-            case _ ⇒
-              throw new IllegalStateException("Unexpected value returned from read: " + readBytes)
+  def doRead(info: ConnectionInfo, closeCommander: Option[ActorRef]): Unit = {
+    @tailrec def innerRead(buffer: ByteBuffer, remainingLimit: Int): ReadResult =
+      if (remainingLimit > 0) {
+        val messageInfo: MessageInfo = channel.receive(buffer,log,assocHandler)
+        if (messageInfo != null){
+          if (messageInfo.bytes > 0 && messageInfo.isComplete()){
+            println(messageInfo)
+            buffer.flip()
+            info.handler ! Received(SctpMessage(ByteString(buffer), SctpMessageInfo(messageInfo)))
+            AllRead
+          } else {
+            innerRead(buffer, remainingLimit - buffer.position)
           }
-        } else MoreDataWaiting
+        } else {
+          association match {
+            case Some(_) ⇒ AllRead
+            case None ⇒  EndOfStream
+          }
+        }
+      } else {
+        BufferOverflow
+      }
 
-      val buffer = bufferPool.acquire()
-      try innerRead(buffer, ReceivedMessageSizeLimit) match {
-        case AllRead ⇒
-          if (!pullMode) info.registration.enableInterest(OP_READ)
-        case MoreDataWaiting ⇒
-          if (!pullMode) self ! ChannelReadable
-        case EndOfStream if isOutputShutdown ⇒
-          if (TraceLogging) log.debug("Read returned end-of-stream, our side already closed")
-          doCloseConnection(info.handler, closeCommander, ConfirmedClosed)
-        case EndOfStream ⇒
-          if (TraceLogging) log.debug("Read returned end-of-stream, our side not yet closed")
-          handleClose(info, closeCommander, PeerClosed)
-      } catch {
-        case e: IOException ⇒ handleError(info.handler, e)
-      } finally bufferPool.release(buffer)
-    }*/
+    val buffer = bufferPool.acquire()
+    buffer.clear()
+    val maxBufferSpace = math.min(DirectBufferSize, ReceivedMessageSizeLimit)
+    buffer.limit(maxBufferSpace)
+    try innerRead(buffer, maxBufferSpace) match {
+      case AllRead ⇒
+        info.registration.enableInterest(OP_READ)
+      case BufferOverflow ⇒
+        throw new IllegalStateException(s"Incoming message size too big: $maxBufferSpace")
+      case EndOfStream if isOutputShutdown ⇒
+        if (TraceLogging) log.debug("Read returned end-of-stream, our side already closed")
+        doCloseConnection(info.handler, closeCommander, ConfirmedClosed)
+      case EndOfStream ⇒
+        if (TraceLogging) log.debug("Read returned end-of-stream, our side not yet closed")
+        handleClose(info, closeCommander, PeerClosed)
+    } catch {
+      case e: IOException ⇒ handleError(info.handler, e)
+    } finally bufferPool.release(buffer)
+  }
 
   def doWrite(info: ConnectionInfo): Unit = pendingWrite = pendingWrite.doWrite(info)
 
@@ -450,6 +433,34 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
         case e: IOException ⇒ self ! WriteFileFailed(e)
       }
   }*/
+
+  class AssociationHandler extends AbstractNotificationHandler[LoggingAdapter] {
+    override def handleNotification(not: AssociationChangeNotification, log: LoggingAdapter):HandlerResult = {
+      if (not.event().equals(AssociationChangeNotification.AssocChangeEvent.COMM_UP)) {
+        val outbound = not.association().maxOutboundStreams()
+        val inbound = not.association().maxInboundStreams()
+        log.debug("New association setup with {} outbound streams, and {} inbound streams.", outbound, inbound)
+      }
+      HandlerResult.CONTINUE
+    }
+
+    override def handleNotification(not: ShutdownNotification, log: LoggingAdapter):HandlerResult = {
+      log.debug("The association has been shutdown {}", not)
+      association = None
+      HandlerResult.RETURN
+    }
+
+    override def handleNotification(not: PeerAddressChangeNotification, log: LoggingAdapter):HandlerResult = {
+      log.debug("The peer address has changed {}", not)
+      HandlerResult.CONTINUE
+    }
+
+    override def handleNotification(not: SendFailedNotification, log: LoggingAdapter):HandlerResult = {
+      log.debug("Send failed {}", not)
+      HandlerResult.CONTINUE
+    }
+  }
+
 }
 
 /**
@@ -459,7 +470,7 @@ private[io] object SctpConnection {
   sealed trait ReadResult
   object EndOfStream extends ReadResult
   object AllRead extends ReadResult
-  object MoreDataWaiting extends ReadResult
+  object BufferOverflow extends ReadResult
 
   /**
    * Used to transport information to the postStop method to notify

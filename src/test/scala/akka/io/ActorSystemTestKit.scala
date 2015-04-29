@@ -15,7 +15,7 @@ trait ActorSystemTestKit extends BeforeAndAfterAll { this: Suite =>
   private lazy val config = ConfigFactory.parseString("""
   akka {
         loggers = ["akka.testkit.TestEventListener"]
-        loglevel = "WARNING"
+        loglevel = "DEBUG"
         stdout-loglevel = "WARNING"
         actor {
           default-dispatcher {
@@ -43,6 +43,12 @@ trait ActorSystemTestKit extends BeforeAndAfterAll { this: Suite =>
   class ActorSystemTest extends TestKit(actorSystem) {
     val actor = TestProbe()
     implicit val sender = actor.ref
+    def stop(probe:TestProbe) = {
+       actorSystem stop probe.ref
+    }
+    def theend = {
+      stop(actor)
+    }
   }
 
   override def afterAll() {
