@@ -71,10 +71,10 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * @param options Please refer to the [[SO]] object for a list of all supported options.
    */
   final case class Connect(remoteAddress: InetSocketAddress,
-                           localAddress: Option[InetSocketAddress] = None,
-                           options: immutable.Traversable[SctpSocketOption] = Nil,
-                           timeout: Option[FiniteDuration] = None,
-                           pullMode: Boolean = false) extends Command
+    localAddress: Option[InetSocketAddress] = None,
+    options: immutable.Traversable[SctpSocketOption] = Nil,
+    timeout: Option[FiniteDuration] = None,
+    pullMode: Boolean = false) extends Command
 
   /**
    * The Bind message is send to the SCTP manager actor, which is obtained via
@@ -96,11 +96,11 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * @param options Please refer to the [[SO]] object for a list of all supported options.
    */
   final case class Bind(handler: ActorRef,
-                        localAddress: InetSocketAddress,
-                        remoteAddresses: Set[InetAddress] = Set.empty,
-                        backlog: Int = 100,
-                        options: immutable.Traversable[SctpSocketOption] = Nil,
-                        pullMode: Boolean = false) extends Command
+    localAddress: InetSocketAddress,
+    remoteAddresses: Set[InetAddress] = Set.empty,
+    backlog: Int = 100,
+    options: immutable.Traversable[SctpSocketOption] = Nil,
+    pullMode: Boolean = false) extends Command
 
   /**
    * This message must be sent to a SCTP connection actor after receiving the
@@ -215,7 +215,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     def ++:(writes: Iterable[WriteCommand]): WriteCommand =
       writes.foldRight(this) {
         case (a: SimpleWriteCommand, b) ⇒ a +: b
-        case (a: CompoundWrite, b)      ⇒ a ++: b
+        case (a: CompoundWrite, b) ⇒ a ++: b
       }
 
     /**
@@ -318,7 +318,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * respective write has been written completely.
    */
   final case class CompoundWrite(override val head: SimpleWriteCommand, tailCommand: WriteCommand) extends WriteCommand
-    with immutable.Iterable[SimpleWriteCommand] {
+      with immutable.Iterable[SimpleWriteCommand] {
 
     def iterator: Iterator[SimpleWriteCommand] =
       new Iterator[SimpleWriteCommand] {
@@ -326,8 +326,8 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
         def hasNext: Boolean = current ne null
         def next(): SimpleWriteCommand =
           current match {
-            case null                  ⇒ Iterator.empty.next()
-            case CompoundWrite(h, t)   ⇒ { current = t; h }
+            case null ⇒ Iterator.empty.next()
+            case CompoundWrite(h, t) ⇒ { current = t; h }
             case x: SimpleWriteCommand ⇒ { current = null; x }
           }
       }
@@ -354,9 +354,10 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    */
   final case class Received(message: SctpMessage) extends Event
   final case class SctpMessage(data: ByteString, info: SctpMessageInfo)
+
   final case class SctpMessageInfo(streamNumber: Int, bytes: Int, payloadProtocolID: Int, timeToLive: Long, association: Association, address: InetSocketAddress)
   object SctpMessageInfo {
-    def apply(messageInfo: MessageInfo):SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), messageInfo.bytes(), messageInfo.payloadProtocolID(), messageInfo.timeToLive(), messageInfo.association(), messageInfo.address().asInstanceOf[InetSocketAddress])
+    def apply(messageInfo: MessageInfo, length: Int): SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), length, messageInfo.payloadProtocolID(), messageInfo.timeToLive(), messageInfo.association(), messageInfo.address().asInstanceOf[InetSocketAddress])
   }
 
   /**
@@ -474,17 +475,17 @@ class SctpExt(system: ExtendedActorSystem) extends IO.Extension {
     val MaxDirectBufferPoolSize: Int = getInt("direct-buffer-pool-limit")
     val RegisterTimeout: Duration = getString("register-timeout") match {
       case "infinite" ⇒ Duration.Undefined
-      case x          ⇒ _config.getMillisDuration("register-timeout")
+      case x ⇒ _config.getMillisDuration("register-timeout")
     }
     val ReceivedMessageSizeLimit: Int = getString("max-received-message-size") match {
       case "unlimited" ⇒ Int.MaxValue
-      case x           ⇒ getIntBytes("max-received-message-size")
+      case x ⇒ getIntBytes("max-received-message-size")
     }
     val ManagementDispatcher: String = getString("management-dispatcher")
     val FileIODispatcher: String = getString("file-io-dispatcher")
     val TransferToLimit: Int = getString("file-io-transferTo-limit") match {
       case "unlimited" ⇒ Int.MaxValue
-      case _           ⇒ getIntBytes("file-io-transferTo-limit")
+      case _ ⇒ getIntBytes("file-io-transferTo-limit")
     }
 
     val MaxChannelsPerSelector: Int = if (MaxChannels == -1) -1 else math.max(MaxChannels / NrOfSelectors, 1)
@@ -493,7 +494,7 @@ class SctpExt(system: ExtendedActorSystem) extends IO.Extension {
 
     val WindowsConnectionAbortWorkaroundEnabled: Boolean = getString("windows-connection-abort-workaround-enabled") match {
       case "auto" ⇒ Helpers.isWindows
-      case _      ⇒ getBoolean("windows-connection-abort-workaround-enabled")
+      case _ ⇒ getBoolean("windows-connection-abort-workaround-enabled")
     }
 
     private[this] def getIntBytes(path: String): Int = {

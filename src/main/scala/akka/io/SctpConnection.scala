@@ -11,12 +11,13 @@ import scala.collection.immutable
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
 import akka.actor._
-import akka.util.ByteString
+import akka.util.{ ByteString, ByteStringBuilder }
 import akka.io.SctpInet.SctpSocketOption
 import akka.io.Sctp._
 import akka.io.SelectionHandler._
 import akka.dispatch.{ UnboundedMessageQueueSemantics, RequiresMessageQueue }
 import akka.event.LoggingAdapter
+import scala.collection.mutable.{ Map => MutableMap }
 
 /**
  * Base class for SctpIncomingConnection and SctpOutgoingConnection.
@@ -24,7 +25,7 @@ import akka.event.LoggingAdapter
  * INTERNAL API
  */
 private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpChannel)
-  extends Actor with ActorLogging with RequiresMessageQueue[UnboundedMessageQueueSemantics] {
+    extends Actor with ActorLogging with RequiresMessageQueue[UnboundedMessageQueueSemantics] {
 
   import sctp.Settings._
   import sctp.bufferPool
@@ -41,6 +42,8 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   def writePending = pendingWrite ne EmptyPendingWrite
   var association: Option[Association] = Option(channel.association)
+
+  val readByteStringMap: MutableMap[Int, Option[ByteString]] = MutableMap.empty.withDefaultValue(None)
 
   // STATES
 
@@ -76,7 +79,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   /** normal connected state */
   def connected(info: ConnectionInfo): Receive =
     handleWriteMessages(info) orElse {
-      case ChannelReadable   ⇒ doRead(info, None)
+      case ChannelReadable ⇒ doRead(info, None)
       case cmd: CloseCommand ⇒ handleClose(info, Some(sender()), cmd.event)
     }
 
@@ -88,7 +91,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   /** connection is closing but a write has to be finished first */
   def closingWithPendingWrite(info: ConnectionInfo, closeCommander: Option[ActorRef],
-                              closedEvent: ConnectionClosed): Receive = {
+    closedEvent: ConnectionClosed): Receive = {
     case ChannelReadable ⇒ doRead(info, closeCommander)
 
     case ChannelWritable ⇒
@@ -104,13 +107,13 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
     case WriteFileFailed(e) ⇒ handleError(info.handler, e) // rethrow exception from dispatcher task
 
-    case Abort              ⇒ handleClose(info, Some(sender()), Aborted)
+    case Abort ⇒ handleClose(info, Some(sender()), Aborted)
   }
 
   /** connection is closed on our side and we're waiting from confirmation from the other side */
   def closing(info: ConnectionInfo, closeCommander: Option[ActorRef]): Receive = {
     case ChannelReadable ⇒ doRead(info, closeCommander)
-    case Abort           ⇒ handleClose(info, Some(sender()), Aborted)
+    case Abort ⇒ handleClose(info, Some(sender()), Aborted)
   }
 
   def handleWriteMessages(info: ConnectionInfo): Receive = {
@@ -167,7 +170,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   /** used in subclasses to start the common machinery above once a channel is connected */
   def completeConnect(registration: ChannelRegistration, commander: ActorRef,
-                      options: immutable.Traversable[SctpSocketOption]): Unit = {
+    options: immutable.Traversable[SctpSocketOption]): Unit = {
     // Turn off Nagle's algorithm by default
     try channel.setOption(SctpStandardSocketOptions.SCTP_NODELAY, Boolean.box(true)) catch {
       case e: SocketException ⇒
@@ -191,37 +194,42 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   }
 
   def doRead(info: ConnectionInfo, closeCommander: Option[ActorRef]): Unit = {
-    @tailrec def innerRead(buffer: ByteBuffer, remainingLimit: Int): ReadResult =
-      if (remainingLimit > 0) {
-        val messageInfo: MessageInfo = channel.receive(buffer,log,assocHandler)
-        if (messageInfo != null){
-          if (messageInfo.bytes > 0 && messageInfo.isComplete()){
-            println(messageInfo)
-            buffer.flip()
-            info.handler ! Received(SctpMessage(ByteString(buffer), SctpMessageInfo(messageInfo)))
+    @tailrec def innerRead(buffer: ByteBuffer): ReadResult = {
+      buffer.clear()
+      val messageInfo: MessageInfo = channel.receive(buffer, log, assocHandler)
+      if (messageInfo != null) {
+        val bytesRead = messageInfo.bytes
+        if (bytesRead < 0) {
+          EndOfStream
+        } else {
+          buffer.flip()
+          val streamNumber = messageInfo.streamNumber
+          if (TraceLogging) log.debug(s"Read [$bytesRead] bytes from $streamNumber stream")
+          val byteString: ByteString = readByteStringMap(streamNumber) match {
+            case Some(pbs) => pbs ++ ByteString(buffer)
+            case None => ByteString(buffer)
+          }
+          if (messageInfo.isComplete()) {
+            info.handler ! Received(SctpMessage(byteString, SctpMessageInfo(messageInfo, byteString.length)))
+            readByteStringMap(streamNumber) = None
+            if (TraceLogging) log.debug(s"message from stream $streamNumber completed ${byteString.length}")
             AllRead
           } else {
-            innerRead(buffer, remainingLimit - buffer.position)
-          }
-        } else {
-          association match {
-            case Some(_) ⇒ AllRead
-            case None ⇒  EndOfStream
+            readByteStringMap(streamNumber) = Some(byteString)
+            innerRead(buffer)
           }
         }
       } else {
-        BufferOverflow
+        association match {
+          case None => EndOfStream
+          case Some(_) => AllRead
+        }
       }
-
+    }
     val buffer = bufferPool.acquire()
-    buffer.clear()
-    val maxBufferSpace = math.min(DirectBufferSize, ReceivedMessageSizeLimit)
-    buffer.limit(maxBufferSpace)
-    try innerRead(buffer, maxBufferSpace) match {
+    try innerRead(buffer) match {
       case AllRead ⇒
         info.registration.enableInterest(OP_READ)
-      case BufferOverflow ⇒
-        throw new IllegalStateException(s"Incoming message size too big: $maxBufferSpace")
       case EndOfStream if isOutputShutdown ⇒
         if (TraceLogging) log.debug("Read returned end-of-stream, our side already closed")
         doCloseConnection(info.handler, closeCommander, ConfirmedClosed)
@@ -240,7 +248,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     else PeerClosed
 
   def handleClose(info: ConnectionInfo, closeCommander: Option[ActorRef],
-                  closedEvent: ConnectionClosed): Unit = closedEvent match {
+    closedEvent: ConnectionClosed): Unit = closedEvent match {
     case Aborted ⇒
       if (TraceLogging) log.debug("Got Abort command. RESETing connection.")
       doCloseConnection(info.handler, closeCommander, closedEvent)
@@ -291,7 +299,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     else {
       t.getMessage match {
         case null | "" ⇒ extractMsg(t.getCause)
-        case msg       ⇒ msg
+        case msg ⇒ msg
       }
     }
 
@@ -335,10 +343,10 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   def PendingWrite(commander: ActorRef, write: WriteCommand): PendingWrite = {
     @tailrec def create(head: WriteCommand, tail: WriteCommand = Write.empty): PendingWrite =
       head match {
-        case Write.empty                         ⇒ if (tail eq Write.empty) EmptyPendingWrite else create(tail)
-        case Write(data, ack) if data.nonEmpty   ⇒ PendingBufferWrite(commander, data, ack, tail)
+        case Write.empty ⇒ if (tail eq Write.empty) EmptyPendingWrite else create(tail)
+        case Write(data, ack) if data.nonEmpty ⇒ PendingBufferWrite(commander, data, ack, tail)
         //case WriteFile(path, offset, count, ack) ⇒ PendingWriteFile(commander, path, offset, count, ack, tail)
-        case CompoundWrite(h, t)                 ⇒ create(h, t)
+        case CompoundWrite(h, t) ⇒ create(h, t)
         case x @ Write(_, ack) ⇒ // empty write with either an ACK or a non-standard NoACK
           if (x.wantsAck) commander ! ack
           create(tail)
@@ -360,11 +368,11 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   }
 
   class PendingBufferWrite(
-    val commander: ActorRef,
-    remainingData: ByteString,
-    ack: Any,
-    buffer: ByteBuffer,
-    tail: WriteCommand) extends PendingWrite {
+      val commander: ActorRef,
+      remainingData: ByteString,
+      ack: Any,
+      buffer: ByteBuffer,
+      tail: WriteCommand) extends PendingWrite {
 
     def doWrite(info: ConnectionInfo): PendingWrite = {
       /*@tailrec def writeToChannel(data: ByteString): PendingWrite = {
@@ -388,7 +396,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
         }
       }*/
       try {
-        val next = /*writeToChannel(remainingData)*/EmptyPendingWrite
+        val next = /*writeToChannel(remainingData)*/ EmptyPendingWrite
         if (next ne EmptyPendingWrite) info.registration.enableInterest(OP_WRITE)
         next
       } catch { case e: IOException ⇒ handleError(info.handler, e); this }
@@ -435,7 +443,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   }*/
 
   class AssociationHandler extends AbstractNotificationHandler[LoggingAdapter] {
-    override def handleNotification(not: AssociationChangeNotification, log: LoggingAdapter):HandlerResult = {
+    override def handleNotification(not: AssociationChangeNotification, log: LoggingAdapter): HandlerResult = {
       if (not.event().equals(AssociationChangeNotification.AssocChangeEvent.COMM_UP)) {
         val outbound = not.association().maxOutboundStreams()
         val inbound = not.association().maxInboundStreams()
@@ -444,18 +452,18 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       HandlerResult.CONTINUE
     }
 
-    override def handleNotification(not: ShutdownNotification, log: LoggingAdapter):HandlerResult = {
+    override def handleNotification(not: ShutdownNotification, log: LoggingAdapter): HandlerResult = {
       log.debug("The association has been shutdown {}", not)
       association = None
       HandlerResult.RETURN
     }
 
-    override def handleNotification(not: PeerAddressChangeNotification, log: LoggingAdapter):HandlerResult = {
+    override def handleNotification(not: PeerAddressChangeNotification, log: LoggingAdapter): HandlerResult = {
       log.debug("The peer address has changed {}", not)
       HandlerResult.CONTINUE
     }
 
-    override def handleNotification(not: SendFailedNotification, log: LoggingAdapter):HandlerResult = {
+    override def handleNotification(not: SendFailedNotification, log: LoggingAdapter): HandlerResult = {
       log.debug("Send failed {}", not)
       HandlerResult.CONTINUE
     }
@@ -470,7 +478,6 @@ private[io] object SctpConnection {
   sealed trait ReadResult
   object EndOfStream extends ReadResult
   object AllRead extends ReadResult
-  object BufferOverflow extends ReadResult
 
   /**
    * Used to transport information to the postStop method to notify
@@ -482,9 +489,9 @@ private[io] object SctpConnection {
    * Groups required connection-related data that are only available once the connection has been fully established.
    */
   final case class ConnectionInfo(registration: ChannelRegistration,
-                                  handler: ActorRef,
-                                  keepOpenOnPeerClosed: Boolean,
-                                  useResumeWriting: Boolean)
+    handler: ActorRef,
+    keepOpenOnPeerClosed: Boolean,
+    useResumeWriting: Boolean)
 
   // INTERNAL MESSAGES
 

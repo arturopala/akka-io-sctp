@@ -4,7 +4,7 @@ import Sctp._
 import akka.actor.{ ActorLogging, Props }
 
 private[io] class SctpManager(sctp: SctpExt)
-  extends SelectionHandler.SelectorBasedManager(sctp.Settings, sctp.Settings.NrOfSelectors) with ActorLogging {
+    extends SelectionHandler.SelectorBasedManager(sctp.Settings, sctp.Settings.NrOfSelectors) with ActorLogging {
 
   def receive = workerForCommandHandler {
     case c: Connect ⇒

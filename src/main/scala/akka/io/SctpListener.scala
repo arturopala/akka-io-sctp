@@ -27,11 +27,11 @@ private[io] object SctpListener {
  * INTERNAL API
  */
 private[io] class SctpListener(selectorRouter: ActorRef,
-                              sctp: SctpExt,
-                              channelRegistry: ChannelRegistry,
-                              bindCommander: ActorRef,
-                              bind: Bind)
-  extends Actor with ActorLogging with RequiresMessageQueue[UnboundedMessageQueueSemantics] {
+  sctp: SctpExt,
+  channelRegistry: ChannelRegistry,
+  bindCommander: ActorRef,
+  bind: Bind)
+    extends Actor with ActorLogging with RequiresMessageQueue[UnboundedMessageQueueSemantics] {
 
   import SctpListener._
   import sctp.Settings._
@@ -39,12 +39,12 @@ private[io] class SctpListener(selectorRouter: ActorRef,
 
   context.watch(bind.handler) // sign death pact
 
-  val sctpServerChannel:SctpServerChannel = SctpServerChannel.open
+  val sctpServerChannel: SctpServerChannel = SctpServerChannel.open
   sctpServerChannel.configureBlocking(false)
 
   var acceptLimit = BatchAcceptLimit
 
-  val localAddresses:Set[InetSocketAddress] =
+  val localAddresses: Set[InetSocketAddress] =
     try {
       bind.options.foreach(_.beforeBind(sctpServerChannel))
       sctpServerChannel.bind(bind.localAddress, bind.backlog)
@@ -53,7 +53,7 @@ private[io] class SctpListener(selectorRouter: ActorRef,
       }
       val ret = sctpServerChannel.getAllLocalAddresses() map {
         case isa: InetSocketAddress ⇒ isa
-        case x                      ⇒ throw new IllegalArgumentException(s"bound to unknown SocketAddress [$x]")
+        case x ⇒ throw new IllegalArgumentException(s"bound to unknown SocketAddress [$x]")
       }
       channelRegistry.register(sctpServerChannel, SelectionKey.OP_ACCEPT)
       log.debug("Successfully bound to {}", ret)
@@ -62,7 +62,7 @@ private[io] class SctpListener(selectorRouter: ActorRef,
     } catch {
       case NonFatal(e) ⇒
         bindCommander ! bind.failureMessage
-        log.error(e, "Bind failed for SCTP sctp server channel on endpoint [{},{}]", bind.localAddress, bind.remoteAddresses)
+        log.warning("Bind failed for SCTP sctp server channel on endpoint [{},{}]", bind.localAddress, bind.remoteAddresses)
         context.stop(self)
         Set.empty
     }
@@ -96,7 +96,7 @@ private[io] class SctpListener(selectorRouter: ActorRef,
   }
 
   @tailrec final def acceptAllPending(registration: ChannelRegistration, limit: Int): Int = {
-    val sctpChannel:SctpChannel =
+    val sctpChannel: SctpChannel =
       if (limit > 0) {
         try sctpServerChannel.accept()
         catch {

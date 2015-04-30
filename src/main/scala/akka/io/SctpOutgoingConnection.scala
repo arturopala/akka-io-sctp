@@ -19,10 +19,10 @@ import com.sun.nio.sctp.{ SctpChannel, SctpServerChannel, SctpStandardSocketOpti
  * INTERNAL API
  */
 private[io] class SctpOutgoingConnection(_stcp: SctpExt,
-                                        channelRegistry: ChannelRegistry,
-                                        commander: ActorRef,
-                                        connect: Connect)
-  extends SctpConnection(_stcp, SctpChannel.open().configureBlocking(false).asInstanceOf[SctpChannel]) {
+  channelRegistry: ChannelRegistry,
+  commander: ActorRef,
+  connect: Connect)
+    extends SctpConnection(_stcp, SctpChannel.open().configureBlocking(false).asInstanceOf[SctpChannel]) {
 
   import context._
   import connect._

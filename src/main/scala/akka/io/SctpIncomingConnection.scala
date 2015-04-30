@@ -12,11 +12,11 @@ import akka.io.SctpInet.SctpSocketOption
  * INTERNAL API
  */
 private[io] class SctpIncomingConnection(_sctp: SctpExt,
-                                        _channel: SctpChannel,
-                                        registry: ChannelRegistry,
-                                        bindHandler: ActorRef,
-                                        options: immutable.Traversable[SctpSocketOption])
-  extends SctpConnection(_sctp, _channel) {
+  _channel: SctpChannel,
+  registry: ChannelRegistry,
+  bindHandler: ActorRef,
+  options: immutable.Traversable[SctpSocketOption])
+    extends SctpConnection(_sctp, _channel) {
 
   context.watch(bindHandler) // sign death pact
 

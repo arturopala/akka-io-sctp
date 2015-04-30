@@ -15,8 +15,8 @@ trait ActorSystemTestKit extends BeforeAndAfterAll { this: Suite =>
   private lazy val config = ConfigFactory.parseString("""
   akka {
         loggers = ["akka.testkit.TestEventListener"]
-        loglevel = "DEBUG"
-        stdout-loglevel = "WARNING"
+        loglevel = "ERROR"
+        stdout-loglevel = "ERROR"
         actor {
           default-dispatcher {
             executor = "fork-join-executor"
@@ -27,6 +27,11 @@ trait ActorSystemTestKit extends BeforeAndAfterAll { this: Suite =>
             }
           }
           serialize-creators = on
+          debug {
+            receive = off
+            autoreceive = off
+            lifecycle = off
+          }
         }
         log-dead-letters = 0
         log-dead-letters-during-shutdown = off
@@ -43,8 +48,12 @@ trait ActorSystemTestKit extends BeforeAndAfterAll { this: Suite =>
   class ActorSystemTest extends TestKit(actorSystem) {
     val actor = TestProbe()
     implicit val sender = actor.ref
-    def stop(probe:TestProbe) = {
-       actorSystem stop probe.ref
+    def stop(probe: TestProbe) = {
+      val p = TestProbe()
+      val ref = probe.ref
+      p.watch(ref)
+      actorSystem stop ref
+      p.expectTerminated(ref)
     }
     def theend = {
       stop(actor)
