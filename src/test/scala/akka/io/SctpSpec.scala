@@ -3,7 +3,7 @@ package akka.io
 import org.junit.runner.RunWith
 import org.scalatest.{ WordSpecLike, Matchers }
 import org.scalatest.prop.PropertyChecks
-import akka.actor.ActorSystem
+import akka.actor.{ Actor, ActorSystem, Props }
 import akka.testkit.{ ImplicitSender, TestActorRef, TestKit }
 import akka.testkit._
 import com.typesafe.config.ConfigFactory
@@ -26,7 +26,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   val NO_OF_SIMULTANEOUS_SCTP_CLIENTS = 5
   val SCTP_CLIENT_MAX_NO_OF_STREAMS = 10
   val byteArrayGenerator = Gen.nonEmptyContainerOf[Array, Byte](Arbitrary.arbitrary[Byte])
-  implicit override val generatorDrivenConfig = PropertyCheckConfig(minSize = 1, maxSize = 100000, minSuccessful = 25, workers = 5)
+  implicit override val generatorDrivenConfig = PropertyCheckConfig(minSize = 1, maxSize = 100 * 1024, minSuccessful = 25, workers = 5)
 
   import Sctp._
 
@@ -131,6 +131,17 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       for (id <- 0 until map.size) receiveAndAssert(id)
       theend
     }
+    "receive and send messages" in new SctpServerWithConnectedHandlerActorTest(Props(classOf[TestReverseEchoActor])) {
+      implicit val generatorDrivenConfig = PropertyCheckConfig(minSize = 1, maxSize = 100 * 1024, minSuccessful = 100, workers = 1)
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          println(s"sending ${array.length}")
+          sendMessage(client, array, 0)
+          val (bytes, messageInfo) = receiveMessage(client)
+          bytes should contain theSameElementsInOrderAs array
+      }
+      theend
+    }
   }
 
   ////////////// TEST UTILS //////////////
@@ -196,6 +207,26 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     }
   }
 
+  abstract class SctpServerWithConnectedHandlerActorTest(props: Props) extends SctpServerBoundTest {
+    val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_STREAMS, SCTP_CLIENT_MAX_NO_OF_STREAMS)
+    val connected = actor.expectMsgType[Connected](timeout)
+    val sctpIncomingConnectionActor = actor.lastSender
+    connected.association should not be (null)
+    connected.remoteAddresses should not be empty
+    connected.localAddresses should have size 1
+    connected.localAddresses.head.getHostString should be(LOCALHOST)
+    val handler = system.actorOf(props)
+    actor.reply(Register(handler))
+    import scala.collection.JavaConversions._
+    val localAddresses = clientChannel.getAllLocalAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet
+    val client = Client(clientChannel, null, localAddresses, sctpIncomingConnectionActor)
+
+    override def theend = {
+      system stop handler
+      super.theend
+    }
+  }
+
   def sendMessage(client: Client, bytes: Array[Byte], streamNumber: Int, payloadProtocolID: Int = 0) = {
     val messageInfo = MessageInfo.createOutgoing(null, streamNumber)
     messageInfo.payloadProtocolID(payloadProtocolID)
@@ -247,5 +278,16 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       serverSocket.bind(new InetSocketAddress(hostname, 0))
       (serverSocket, new InetSocketAddress(hostname, serverSocket.getLocalPort))
     } collect { case (socket, address) ⇒ socket.close(); address }
+  }
+
+}
+
+class TestReverseEchoActor() extends Actor {
+  import Sctp._
+  object Ack extends Event
+  def receive = {
+    case Received(msg) =>
+      sender ! Send(msg, Ack)
+    case Ack =>
   }
 }

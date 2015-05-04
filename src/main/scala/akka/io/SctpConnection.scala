@@ -96,8 +96,6 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       if (!isPendingSend) // writing is now finished
         handleClose(info, closeCommander, closedEvent)
 
-    case WriteFileFailed(e) ⇒ handleError(info.handler, e) // rethrow exception from dispatcher task
-
     case Abort ⇒ handleClose(info, Some(sender()), Aborted)
   }
 
@@ -114,8 +112,6 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     case send: Send ⇒
       pendingSend = pendingSend :+ (send, sender())
       info.registration.enableInterest(OP_WRITE)
-
-    case WriteFileFailed(e) ⇒ handleError(info.handler, e) // rethrow exception from dispatcher task
   }
 
   // AUXILIARIES and IMPLEMENTATION
@@ -365,23 +361,6 @@ private[io] object SctpConnection {
   final case class ConnectionInfo(registration: ChannelRegistration,
     handler: ActorRef,
     keepOpenOnPeerClosed: Boolean)
-
-  // INTERNAL MESSAGES
-
-  final case class UpdatePendingWriteAndThen(remainingWrite: (Send, ActorRef), work: () ⇒ Unit) extends NoSerializationVerificationNeeded
-  final case class WriteFileFailed(e: IOException)
-
-  sealed abstract class PendingWrite {
-    def commander: ActorRef
-    def doWrite(info: ConnectionInfo): PendingWrite
-    def release(): Unit // free any occupied resources
-  }
-
-  object EmptyPendingWrite extends PendingWrite {
-    def commander: ActorRef = throw new IllegalStateException
-    def doWrite(info: ConnectionInfo): PendingWrite = throw new IllegalStateException
-    def release(): Unit = throw new IllegalStateException
-  }
 
   val doNothing: () ⇒ Unit = () ⇒ ()
 }
