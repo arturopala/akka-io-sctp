@@ -32,15 +32,13 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   import SctpConnection._
   import scala.collection.JavaConversions._
 
-  private[this] var pendingWrite: PendingWrite = EmptyPendingWrite
   private[this] var peerClosed = false
-  private[this] var writingSuspended = false
-  private[this] var interestedInResume: Option[ActorRef] = None
   var closedMessage: CloseInformation = _ // for ConnectionClosed message in postStop
   var isOutputShutdown = false
   val assocHandler = new AssociationHandler()
 
-  def writePending = pendingWrite ne EmptyPendingWrite
+  private[this] var pendingSend: Vector[(Send, ActorRef)] = Vector.empty
+  def isPendingSend = !pendingSend.isEmpty
   var association: Option[Association] = Option(channel.association)
 
   val readByteStringMap: MutableMap[Int, Option[ByteString]] = MutableMap.empty.withDefaultValue(None)
@@ -49,7 +47,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   /** connection established, waiting for registration from user handler */
   def waitingForRegistration(registration: ChannelRegistration, commander: ActorRef): Receive = {
-    case Register(handler, keepOpenOnPeerClosed, useResumeWriting) ⇒
+    case Register(handler, keepOpenOnPeerClosed) ⇒
       // up to this point we've been watching the commander,
       // but since registration is now complete we only need to watch the handler from here on
       if (handler != commander) {
@@ -58,15 +56,14 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       }
       if (TraceLogging) log.debug("[{}] registered as connection handler", handler)
 
-      val info = ConnectionInfo(registration, handler, keepOpenOnPeerClosed, useResumeWriting)
-
+      val info = ConnectionInfo(registration, handler, keepOpenOnPeerClosed)
       info.registration.disableInterest(OP_READ)
       doRead(info, None) // immediately try reading
       context.setReceiveTimeout(Duration.Undefined)
       context.become(connected(info))
 
     case cmd: CloseCommand ⇒
-      val info = ConnectionInfo(registration, commander, keepOpenOnPeerClosed = false, useResumeWriting = false)
+      val info = ConnectionInfo(registration, commander, keepOpenOnPeerClosed = false)
       handleClose(info, Some(sender()), cmd.event)
 
     case ReceiveTimeout ⇒
@@ -96,14 +93,8 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
     case ChannelWritable ⇒
       doWrite(info)
-      if (!writePending) // writing is now finished
+      if (!isPendingSend) // writing is now finished
         handleClose(info, closeCommander, closedEvent)
-
-    case UpdatePendingWriteAndThen(remaining, work) ⇒
-      pendingWrite = remaining
-      work()
-      if (writePending) info.registration.enableInterest(OP_WRITE)
-      else handleClose(info, closeCommander, closedEvent)
 
     case WriteFileFailed(e) ⇒ handleError(info.handler, e) // rethrow exception from dispatcher task
 
@@ -118,50 +109,11 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   def handleWriteMessages(info: ConnectionInfo): Receive = {
     case ChannelWritable ⇒
-      if (writePending) {
-        doWrite(info)
-        if (!writePending && interestedInResume.nonEmpty) {
-          interestedInResume.get ! WritingResumed
-          interestedInResume = None
-        }
-      }
+      doWrite(info)
 
-    case write: WriteCommand ⇒
-      if (writingSuspended) {
-        if (TraceLogging) log.debug("Dropping write because writing is suspended")
-        sender() ! write.failureMessage
-
-      } else if (writePending) {
-        if (TraceLogging) log.debug("Dropping write because queue is full")
-        sender() ! write.failureMessage
-        if (info.useResumeWriting) writingSuspended = true
-
-      } else {
-        pendingWrite = PendingWrite(sender(), write)
-        if (writePending) doWrite(info)
-      }
-
-    case ResumeWriting ⇒
-      /*
-       * If more than one actor sends Writes then the first to send this
-       * message might resume too early for the second, leading to a Write of
-       * the second to go through although it has not been resumed yet; there
-       * is nothing we can do about this apart from all actors needing to
-       * register themselves and us keeping track of them, which sounds bad.
-       *
-       * Thus it is documented that useResumeWriting is incompatible with
-       * multiple writers. But we fail as gracefully as we can.
-       */
-      writingSuspended = false
-      if (writePending) {
-        if (interestedInResume.isEmpty) interestedInResume = Some(sender())
-        else sender() ! CommandFailed(ResumeWriting)
-      } else sender() ! WritingResumed
-
-    case UpdatePendingWriteAndThen(remaining, work) ⇒
-      pendingWrite = remaining
-      work()
-      if (writePending) info.registration.enableInterest(OP_WRITE)
+    case send: Send ⇒
+      pendingSend = pendingSend :+ (send, sender())
+      info.registration.enableInterest(OP_WRITE)
 
     case WriteFileFailed(e) ⇒ handleError(info.handler, e) // rethrow exception from dispatcher task
   }
@@ -241,7 +193,33 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     } finally bufferPool.release(buffer)
   }
 
-  def doWrite(info: ConnectionInfo): Unit = pendingWrite = pendingWrite.doWrite(info)
+  def doWrite(info: ConnectionInfo): Unit = {
+    def writeToChannel(_buffer: ByteBuffer, message: SctpMessage, ack: Event, commander: ActorRef): Unit = {
+      val length = message.data.length
+      val buffer = if (length > DirectBufferSize) ByteBuffer.allocateDirect(length) else _buffer
+      val copied = message.data.copyToBuffer(buffer)
+      buffer.flip()
+      val mi = message.info.asMessageInfo
+      val writtenBytes = channel.send(buffer, mi)
+      if (writtenBytes > 0) {
+        if (TraceLogging) log.debug("Wrote [{}] bytes to channel", writtenBytes)
+        if (!ack.isInstanceOf[NoAck]) commander ! ack
+      }
+    }
+    if (isPendingSend) {
+      val buffer = bufferPool.acquire()
+      try {
+        val (Send(message, ack), commander) = pendingSend.head
+        pendingSend = pendingSend.tail
+        writeToChannel(buffer, message, ack, commander)
+        if (isPendingSend) {
+          info.registration.enableInterest(OP_WRITE)
+        }
+      } catch {
+        case e: IOException ⇒ handleError(info.handler, e)
+      } finally bufferPool.release(buffer)
+    }
+  }
 
   def closeReason =
     if (isOutputShutdown) ConfirmedClosed
@@ -258,7 +236,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       // used to check if peer already closed its side later
       peerClosed = true
       context.become(peerSentEOF(info))
-    case _ if writePending ⇒ // finish writing first
+    case _ if isPendingSend ⇒ // finish writing first
       if (TraceLogging) log.debug("Got Close command but write is still pending.")
       context.become(closingWithPendingWrite(info, closeCommander, closedEvent))
     case ConfirmedClosed ⇒ // shutdown output and wait for confirmation
@@ -326,11 +304,9 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     if (channel.isOpen)
       abort()
 
-    if (writePending) pendingWrite.release()
-
     if (closedMessage != null) {
       val interestedInClose =
-        if (writePending) closedMessage.notificationsTo + pendingWrite.commander
+        if (isPendingSend) closedMessage.notificationsTo ++ (pendingSend.map(_._2).toSet)
         else closedMessage.notificationsTo
 
       interestedInClose.foreach(_ ! closedMessage.closedEvent)
@@ -339,108 +315,6 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   override def postRestart(reason: Throwable): Unit =
     throw new IllegalStateException("Restarting not supported for connection actors.")
-
-  def PendingWrite(commander: ActorRef, write: WriteCommand): PendingWrite = {
-    @tailrec def create(head: WriteCommand, tail: WriteCommand = Write.empty): PendingWrite =
-      head match {
-        case Write.empty ⇒ if (tail eq Write.empty) EmptyPendingWrite else create(tail)
-        case Write(data, ack) if data.nonEmpty ⇒ PendingBufferWrite(commander, data, ack, tail)
-        //case WriteFile(path, offset, count, ack) ⇒ PendingWriteFile(commander, path, offset, count, ack, tail)
-        case CompoundWrite(h, t) ⇒ create(h, t)
-        case x @ Write(_, ack) ⇒ // empty write with either an ACK or a non-standard NoACK
-          if (x.wantsAck) commander ! ack
-          create(tail)
-      }
-    create(write)
-  }
-
-  def PendingBufferWrite(commander: ActorRef, data: ByteString, ack: Event, tail: WriteCommand): PendingBufferWrite = {
-    val buffer = bufferPool.acquire()
-    try {
-      val copied = data.copyToBuffer(buffer)
-      buffer.flip()
-      new PendingBufferWrite(commander, data.drop(copied), ack, buffer, tail)
-    } catch {
-      case NonFatal(e) ⇒
-        bufferPool.release(buffer)
-        throw e
-    }
-  }
-
-  class PendingBufferWrite(
-      val commander: ActorRef,
-      remainingData: ByteString,
-      ack: Any,
-      buffer: ByteBuffer,
-      tail: WriteCommand) extends PendingWrite {
-
-    def doWrite(info: ConnectionInfo): PendingWrite = {
-      /*@tailrec def writeToChannel(data: ByteString): PendingWrite = {
-        val writtenBytes = channel.write(buffer) // at first we try to drain the remaining bytes from the buffer
-        if (TraceLogging) log.debug("Wrote [{}] bytes to channel", writtenBytes)
-        if (buffer.hasRemaining) {
-          // we weren't able to write all bytes from the buffer, so we need to try again later
-          if (data eq remainingData) this
-          else new PendingBufferWrite(commander, data, ack, buffer, tail) // copy with updated remainingData
-
-        } else if (data.nonEmpty) {
-          buffer.clear()
-          val copied = data.copyToBuffer(buffer)
-          buffer.flip()
-          writeToChannel(data drop copied)
-
-        } else {
-          if (!ack.isInstanceOf[NoAck]) commander ! ack
-          release()
-          PendingWrite(commander, tail)
-        }
-      }*/
-      try {
-        val next = /*writeToChannel(remainingData)*/ EmptyPendingWrite
-        if (next ne EmptyPendingWrite) info.registration.enableInterest(OP_WRITE)
-        next
-      } catch { case e: IOException ⇒ handleError(info.handler, e); this }
-    }
-
-    def release(): Unit = bufferPool.release(buffer)
-  }
-
-  /*def PendingWriteFile(commander: ActorRef, filePath: String, offset: Long, count: Long, ack: Event,
-                       tail: WriteCommand): PendingWriteFile =
-    new PendingWriteFile(commander, new FileInputStream(filePath).getChannel, offset, count, ack, tail)
-
-  class PendingWriteFile(
-    val commander: ActorRef,
-    fileChannel: FileChannel,
-    offset: Long,
-    remaining: Long,
-    ack: Event,
-    tail: WriteCommand) extends PendingWrite with Runnable {
-
-    def doWrite(info: ConnectionInfo): PendingWrite = {
-      sctp.fileIoDispatcher.execute(this)
-      this
-    }
-
-    def release(): Unit = fileChannel.close()
-
-    def run(): Unit =
-      try {
-        val toWrite = math.min(remaining, sctp.Settings.TransferToLimit)
-        val written = fileChannel.transferTo(offset, toWrite, channel)
-
-        if (written < remaining) {
-          val updated = new PendingWriteFile(commander, fileChannel, offset + written, remaining - written, ack, tail)
-          self ! UpdatePendingWriteAndThen(updated, TcpConnection.doNothing)
-        } else {
-          release()
-          val andThen = if (!ack.isInstanceOf[NoAck]) () ⇒ commander ! ack else doNothing
-          self ! UpdatePendingWriteAndThen(PendingWrite(commander, tail), andThen)
-        }
-      } catch {
-        case e: IOException ⇒ self ! WriteFileFailed(e)
-      }
-  }*/
 
   class AssociationHandler extends AbstractNotificationHandler[LoggingAdapter] {
     override def handleNotification(not: AssociationChangeNotification, log: LoggingAdapter): HandlerResult = {
@@ -490,12 +364,11 @@ private[io] object SctpConnection {
    */
   final case class ConnectionInfo(registration: ChannelRegistration,
     handler: ActorRef,
-    keepOpenOnPeerClosed: Boolean,
-    useResumeWriting: Boolean)
+    keepOpenOnPeerClosed: Boolean)
 
   // INTERNAL MESSAGES
 
-  final case class UpdatePendingWriteAndThen(remainingWrite: PendingWrite, work: () ⇒ Unit) extends NoSerializationVerificationNeeded
+  final case class UpdatePendingWriteAndThen(remainingWrite: (Send, ActorRef), work: () ⇒ Unit) extends NoSerializationVerificationNeeded
   final case class WriteFileFailed(e: IOException)
 
   sealed abstract class PendingWrite {

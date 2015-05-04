@@ -16,12 +16,15 @@ import java.nio.{ ByteBuffer }
 import com.sun.nio.sctp._
 import org.scalacheck._
 import java.util.concurrent.atomic.AtomicInteger
+import akka.util.ByteString
 
 @RunWith(classOf[JUnitRunner])
 class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with ActorSystemTestKit {
 
   val timeout = 500.millis.dilated(actorSystem)
   val LOCALHOST = "127.0.0.1"
+  val NO_OF_SIMULTANEOUS_SCTP_CLIENTS = 5
+  val SCTP_CLIENT_MAX_NO_OF_STREAMS = 10
   val byteArrayGenerator = Gen.nonEmptyContainerOf[Array, Byte](Arbitrary.arbitrary[Byte])
   implicit override val generatorDrivenConfig = PropertyCheckConfig(minSize = 1, maxSize = 100000, minSuccessful = 25, workers = 5)
 
@@ -61,9 +64,9 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       val map = scala.collection.mutable.Map[Int, Array[Byte]]()
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
-          val id = nextInt()
+          val id = nsn.getAndIncrement
           map(id) = array
-          sendMessage(client, array, id % 10, id)
+          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id)
       }
       handler.receiveN(generatorDrivenConfig.minSuccessful, timeout * 100) foreach {
         case Received(message) =>
@@ -76,19 +79,68 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       }
       theend
     }
-    /*"receive multiple incoming connections, register handler actors and receive messages" in new SctpServerWithMultipleConnectedClientTest(5) {
-      sendAndAssertMessage(clients(0), Array.range(0, 10000).map(_.toByte), 0)
-      sendAndAssertMessage(clients(1), Array.range(0, 10000).map(_.toByte), 1)
-      sendAndAssertMessage(clients(2), Array.range(0, 10000).map(_.toByte), 0)
-      sendAndAssertMessage(clients(3), Array.range(0, 10000).map(_.toByte), 1)
-      sendAndAssertMessage(clients(4), Array.range(0, 10000).map(_.toByte), 0)
+    "receive multiple incoming connections, register handler actors and receive messages" in new SctpServerWithMultipleConnectedClientTest(NO_OF_SIMULTANEOUS_SCTP_CLIENTS) {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val id = nsn.getAndIncrement
+          sendAndAssertMessage(clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS), array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id)
+      }
       theend
-    }*/
+    }
+    "send messages to the single incoming connection" in new SctpServerWithSingleConnectedClientTest {
+      case object Ack extends Event
+      val map = scala.collection.mutable.Map[Int, Array[Byte]]()
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val id = nsn.getAndIncrement
+          map(id) = array
+          sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id), Ack)
+      }
+      def receiveAndAssert: Unit = {
+        val (bytes, messageInfo) = receiveMessage(client)
+        if (messageInfo != null && messageInfo.bytes >= 0) {
+          val expected = map(messageInfo.payloadProtocolID)
+          bytes should have size expected.length
+          bytes should contain theSameElementsInOrderAs expected
+        }
+        actor.expectMsg(Ack)
+      }
+      for (i <- 1 to map.size) receiveAndAssert
+      theend
+    }
+    "send messages to the multiple incoming connection" in new SctpServerWithMultipleConnectedClientTest(NO_OF_SIMULTANEOUS_SCTP_CLIENTS) {
+      case object Ack extends Event
+      val map = scala.collection.mutable.Map[Int, Array[Byte]]()
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val id = nsn.getAndIncrement
+          map(id) = array
+          val client = clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS)
+          client.sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id), Ack)
+      }
+      def receiveAndAssert(id: Int): Unit = {
+        val client = clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS)
+        val (bytes, messageInfo) = receiveMessage(client)
+        if (messageInfo != null && messageInfo.bytes >= 0) {
+          val expected = map(messageInfo.payloadProtocolID)
+          bytes should have size expected.length
+          bytes should contain theSameElementsInOrderAs expected
+        }
+        actor.expectMsg(Ack)
+      }
+      for (id <- 0 until map.size) receiveAndAssert(id)
+      theend
+    }
   }
 
   ////////////// TEST UTILS //////////////
 
-  case class Client(channel: SctpChannel, handler: TestProbe, localAddresses: Set[InetSocketAddress])
+  case class Client(channel: SctpChannel, handler: TestProbe, localAddresses: Set[InetSocketAddress], sctpIncomingConnectionActor: ActorRef) {
+    def close(implicit system: ActorSystem): Unit = {
+      channel.close()
+      system.stop(handler.ref)
+    }
+  }
 
   abstract class ScptTest extends ActorSystemTest
 
@@ -101,8 +153,9 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   }
 
   abstract class SctpServerWithSingleConnectedClientTest extends SctpServerBoundTest {
-    val clientChannel = SctpChannel.open(bound.localAddresses.head, 0, 0);
+    val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_STREAMS, SCTP_CLIENT_MAX_NO_OF_STREAMS)
     val connected = actor.expectMsgType[Connected](timeout)
+    val sctpIncomingConnectionActor = actor.lastSender
     connected.association should not be (null)
     connected.remoteAddresses should not be empty
     connected.localAddresses should have size 1
@@ -111,19 +164,20 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     actor.reply(Register(handler.ref))
     import scala.collection.JavaConversions._
     val localAddresses = clientChannel.getAllLocalAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet
-    val client = Client(clientChannel, handler, localAddresses)
+    val client = Client(clientChannel, handler, localAddresses, sctpIncomingConnectionActor)
+    val nsn = new AtomicInteger(0)
 
     override def theend = {
-      clientChannel.close()
-      stop(handler)
+      client.close(system)
       super.theend
     }
   }
 
   abstract class SctpServerWithMultipleConnectedClientTest(numberOfClients: Int) extends SctpServerBoundTest {
     val clients = for (i <- 1 to numberOfClients) yield {
-      val clientChannel = SctpChannel.open(bound.localAddresses.head, 0, 0);
+      val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_STREAMS, SCTP_CLIENT_MAX_NO_OF_STREAMS)
       val connected = actor.expectMsgType[Connected](timeout)
+      val sctpIncomingConnectionActor = actor.lastSender
       connected.association should not be (null)
       connected.remoteAddresses should not be empty
       connected.localAddresses should have size 1
@@ -132,15 +186,12 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       actor.reply(Register(handler.ref))
       import scala.collection.JavaConversions._
       val localAddresses = clientChannel.getAllLocalAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet
-      Client(clientChannel, handler, localAddresses)
+      Client(clientChannel, handler, localAddresses, sctpIncomingConnectionActor)
     }
+    val nsn = new AtomicInteger(0)
 
     override def theend = {
-      clients foreach {
-        case Client(clientChannel, handler, _) =>
-          clientChannel.close()
-          stop(handler)
-      }
+      clients.foreach(_.close(system))
       super.theend
     }
   }
@@ -167,6 +218,19 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     client.localAddresses should contain(received.message.info.address)
   }
 
+  def receiveMessage(client: Client): (Array[Byte], MessageInfo) = {
+    def receive(prev: ByteString = ByteString.empty): (ByteString, MessageInfo) = {
+      val buf = ByteBuffer.allocateDirect(1024)
+      val messageInfo = client.channel.receive(buf, null, null)
+      buf.flip()
+      val byteString = prev ++ ByteString(buf)
+      if (messageInfo == null || messageInfo.isComplete) (byteString, messageInfo)
+      else receive(byteString)
+    }
+    val (byteString, messageInfo) = receive()
+    (byteString.toArray, messageInfo)
+  }
+
   def temporaryServerAddress(hostname: String = LOCALHOST): InetSocketAddress = {
     import java.nio.channels.ServerSocketChannel
     val serverSocket = ServerSocketChannel.open().socket()
@@ -184,7 +248,4 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       (serverSocket, new InetSocketAddress(hostname, serverSocket.getLocalPort))
     } collect { case (socket, address) ⇒ socket.close(); address }
   }
-
-  val nsn = new AtomicInteger(0)
-  def nextInt(): Int = nsn.getAndIncrement
 }

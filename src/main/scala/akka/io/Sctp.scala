@@ -51,6 +51,31 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    */
   sealed trait Message extends NoSerializationVerificationNeeded
 
+  /// SCTP MESSAGE
+
+  final case class SctpMessage(data: ByteString, info: SctpMessageInfo)
+  object SctpMessage {
+    def apply(data: ByteString, streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0): SctpMessage = new SctpMessage(data, SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive))
+  }
+
+  final case class SctpMessageInfo(streamNumber: Int, bytes: Int, payloadProtocolID: Int, timeToLive: Long, association: Association, address: InetSocketAddress) {
+    def asMessageInfo: MessageInfo = {
+      val mi = MessageInfo.createOutgoing(null, streamNumber)
+      mi.payloadProtocolID(payloadProtocolID)
+      mi.timeToLive(timeToLive)
+      mi
+    }
+  }
+  object SctpMessageInfo {
+    def apply(messageInfo: MessageInfo, length: Int): SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), length, messageInfo.payloadProtocolID(), messageInfo.timeToLive(), messageInfo.association(), messageInfo.address().asInstanceOf[InetSocketAddress])
+    def apply(streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0): SctpMessageInfo = {
+      val mi = MessageInfo.createOutgoing(null, streamNumber)
+      mi.payloadProtocolID(payloadProtocolID)
+      mi.timeToLive(timeToLive)
+      SctpMessageInfo(mi, -1)
+    }
+  }
+
   /// COMMANDS
 
   /**
@@ -114,13 +139,8 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * @param keepOpenOnPeerClosed If this is set to true then the connection
    *                is not automatically closed when the peer closes its half,
    *                requiring an explicit [[Closed]] from our side when finished.
-   *
-   * @param useResumeWriting If this is set to true then the connection actor
-   *                will refuse all further writes after issuing a [[CommandFailed]]
-   *                notification until [[ResumeWriting]] is received. This can
-   *                be used to implement NACK-based write backpressure.
    */
-  final case class Register(handler: ActorRef, keepOpenOnPeerClosed: Boolean = false, useResumeWriting: Boolean = true) extends Command
+  final case class Register(handler: ActorRef, keepOpenOnPeerClosed: Boolean = false) extends Command
 
   /**
    * In order to close down a listening socket, send this message to that socket’s
@@ -184,8 +204,8 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
   }
 
   /**
-   * Each [[WriteCommand]] can optionally request a positive acknowledgment to be sent
-   * to the commanding actor. If such notification is not desired the [[WriteCommand#ack]]
+   * Each [[Send]] can optionally request a positive acknowledgment to be sent
+   * to the commanding actor. If such notification is not desired the [[Send#ack]]
    * must be set to an instance of this class. The token contained within can be used
    * to recognize which write failed when receiving a [[CommandFailed]] message.
    */
@@ -198,149 +218,20 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
   object NoAck extends NoAck(null)
 
   /**
-   * Common interface for all write commands, currently [[Write]], [[WriteFile]] and [[CompoundWrite]].
+   * Send data to the SCTP connection. If no ack is needed use the special
+   * `NoAck` object. The connection actor will reply with a [[CommandFailed]]
+   * message if the write could not be enqueued. If [[Send#wantsAck]]
+   * returns true, the connection actor will reply with the supplied [[Send#ack]]
+   * token once the write has been successfully enqueued to the O/S kernel.
+   * <b>Note that this does not in any way guarantee that the data will be
+   * or have been sent!</b> Unfortunately there is no way to determine whether
+   * a particular write has been sent by the O/S.
    */
-  sealed abstract class WriteCommand extends Command {
-    /**
-     * Prepends this command with another `Write` or `WriteFile` to form
-     * a `CompoundWrite`.
-     */
-    def +:(other: SimpleWriteCommand): CompoundWrite = CompoundWrite(other, this)
-
-    /**
-     * Prepends this command with a number of other writes.
-     * The first element of the given Iterable becomes the first sub write of a potentially
-     * created `CompoundWrite`.
-     */
-    def ++:(writes: Iterable[WriteCommand]): WriteCommand =
-      writes.foldRight(this) {
-        case (a: SimpleWriteCommand, b) ⇒ a +: b
-        case (a: CompoundWrite, b) ⇒ a ++: b
-      }
-
-    /**
-     * Java API: prepends this command with another `Write` or `WriteFile` to form
-     * a `CompoundWrite`.
-     */
-    def prepend(that: SimpleWriteCommand): CompoundWrite = that +: this
-
-    /**
-     * Java API: prepends this command with a number of other writes.
-     * The first element of the given Iterable becomes the first sub write of a potentially
-     * created `CompoundWrite`.
-     */
-    def prepend(writes: JIterable[WriteCommand]): WriteCommand = writes.asScala ++: this
-  }
-
-  object WriteCommand {
-    /**
-     * Combines the given number of write commands into one atomic `WriteCommand`.
-     */
-    def apply(writes: Iterable[WriteCommand]): WriteCommand = writes ++: Write.empty
-
-    /**
-     * Java API: combines the given number of write commands into one atomic `WriteCommand`.
-     */
-    def create(writes: JIterable[WriteCommand]): WriteCommand = apply(writes.asScala)
-  }
-
-  /**
-   * Common supertype of [[Write]] and [[WriteFile]].
-   */
-  sealed abstract class SimpleWriteCommand extends WriteCommand {
+  final case class Send(message: SctpMessage, ack: Event) extends Command {
     require(ack != null, "ack must be non-null. Use NoAck if you don't want acks.")
 
-    /**
-     * The acknowledgment token associated with this write command.
-     */
-    def ack: Event
-
-    /**
-     * An acknowledgment is only sent if this write command “wants an ack”, which is
-     * equivalent to the [[#ack]] token not being a of type [[NoAck]].
-     */
     def wantsAck: Boolean = !ack.isInstanceOf[NoAck]
-
-    /**
-     * Java API: appends this command with another `WriteCommand` to form a `CompoundWrite`.
-     */
-    def append(that: WriteCommand): CompoundWrite = this +: that
   }
-
-  /**
-   * Write data to the SCTP connection. If no ack is needed use the special
-   * `NoAck` object. The connection actor will reply with a [[CommandFailed]]
-   * message if the write could not be enqueued. If [[WriteCommand#wantsAck]]
-   * returns true, the connection actor will reply with the supplied [[WriteCommand#ack]]
-   * token once the write has been successfully enqueued to the O/S kernel.
-   * <b>Note that this does not in any way guarantee that the data will be
-   * or have been sent!</b> Unfortunately there is no way to determine whether
-   * a particular write has been sent by the O/S.
-   */
-  final case class Write(data: ByteString, ack: Event) extends SimpleWriteCommand
-  object Write {
-    /**
-     * The empty Write doesn't write anything and isn't acknowledged.
-     * It will, however, be denied and sent back with `CommandFailed` if the
-     * connection isn't currently ready to send any data (because another WriteCommand
-     * is still pending).
-     */
-    val empty: Write = Write(ByteString.empty, NoAck)
-
-    /**
-     * Create a new unacknowledged Write command with the given data.
-     */
-    def apply(data: ByteString): Write =
-      if (data.isEmpty) empty else Write(data, NoAck)
-  }
-
-  /**
-   * Write `count` bytes starting at `position` from file at `filePath` to the connection.
-   * The count must be > 0. The connection actor will reply with a [[CommandFailed]]
-   * message if the write could not be enqueued. If [[WriteCommand#wantsAck]]
-   * returns true, the connection actor will reply with the supplied [[WriteCommand#ack]]
-   * token once the write has been successfully enqueued to the O/S kernel.
-   * <b>Note that this does not in any way guarantee that the data will be
-   * or have been sent!</b> Unfortunately there is no way to determine whether
-   * a particular write has been sent by the O/S.
-   */
-  final case class WriteFile(filePath: String, position: Long, count: Long, ack: Event) extends SimpleWriteCommand {
-    require(position >= 0, "WriteFile.position must be >= 0")
-    require(count > 0, "WriteFile.count must be > 0")
-  }
-
-  /**
-   * A write command which aggregates two other write commands. Using this construct
-   * you can chain a number of [[Write]] and/or [[WriteFile]] commands together in a way
-   * that allows them to be handled as a single write which gets written out to the
-   * network as quickly as possible.
-   * If the sub commands contain `ack` requests they will be honored as soon as the
-   * respective write has been written completely.
-   */
-  final case class CompoundWrite(override val head: SimpleWriteCommand, tailCommand: WriteCommand) extends WriteCommand
-      with immutable.Iterable[SimpleWriteCommand] {
-
-    def iterator: Iterator[SimpleWriteCommand] =
-      new Iterator[SimpleWriteCommand] {
-        private[this] var current: WriteCommand = CompoundWrite.this
-        def hasNext: Boolean = current ne null
-        def next(): SimpleWriteCommand =
-          current match {
-            case null ⇒ Iterator.empty.next()
-            case CompoundWrite(h, t) ⇒ { current = t; h }
-            case x: SimpleWriteCommand ⇒ { current = null; x }
-          }
-      }
-  }
-
-  /**
-   * When `useResumeWriting` is in effect as was indicated in the [[Register]] message
-   * then this command needs to be sent to the connection actor in order to re-enable
-   * writing after a [[CommandFailed]] event. All [[WriteCommand]] processed by the
-   * connection actor between the first [[CommandFailed]] and subsequent reception of
-   * this message will also be rejected with [[CommandFailed]].
-   */
-  case object ResumeWriting extends Command
 
   /// EVENTS
   /**
@@ -353,18 +244,12 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * class to the handler actor which was designated in the [[Register]] message.
    */
   final case class Received(message: SctpMessage) extends Event
-  final case class SctpMessage(data: ByteString, info: SctpMessageInfo)
-
-  final case class SctpMessageInfo(streamNumber: Int, bytes: Int, payloadProtocolID: Int, timeToLive: Long, association: Association, address: InetSocketAddress)
-  object SctpMessageInfo {
-    def apply(messageInfo: MessageInfo, length: Int): SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), length, messageInfo.payloadProtocolID(), messageInfo.timeToLive(), messageInfo.association(), messageInfo.address().asInstanceOf[InetSocketAddress])
-  }
 
   /**
    * The connection actor sends this message either to the sender of a [[Connect]]
    * command (for outbound) or to the handler for incoming connections designated
    * in the [[Bind]] message. The connection is characterized by the `remoteAddresses`
-   * and `localAddresses` SCTP endpoints.
+   * and `localAddresses` SCTP endpoints, and `association`.
    */
   final case class Connected(remoteAddresses: Set[InetSocketAddress], localAddresses: Set[InetSocketAddress], association: Association) extends Event
 
@@ -482,11 +367,6 @@ class SctpExt(system: ExtendedActorSystem) extends IO.Extension {
       case x ⇒ getIntBytes("max-received-message-size")
     }
     val ManagementDispatcher: String = getString("management-dispatcher")
-    val FileIODispatcher: String = getString("file-io-dispatcher")
-    val TransferToLimit: Int = getString("file-io-transferTo-limit") match {
-      case "unlimited" ⇒ Int.MaxValue
-      case _ ⇒ getIntBytes("file-io-transferTo-limit")
-    }
 
     val MaxChannelsPerSelector: Int = if (MaxChannels == -1) -1 else math.max(MaxChannels / NrOfSelectors, 1)
     val FinishConnectRetries: Int = getInt("finish-connect-retries") requiring (_ > 0,
@@ -518,6 +398,5 @@ class SctpExt(system: ExtendedActorSystem) extends IO.Extension {
   def getManager: ActorRef = manager
 
   val bufferPool: BufferPool = new DirectByteBufferPool(Settings.DirectBufferSize, Settings.MaxDirectBufferPoolSize)
-  val fileIoDispatcher = system.dispatchers.lookup(Settings.FileIODispatcher)
 
 }

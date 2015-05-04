@@ -38,6 +38,7 @@ trait ActorSystemTestKit extends BeforeAndAfterAll { this: Suite =>
         io {
           sctp {
             register-timeout = 500ms
+            trace-logging = on
           }
         }
       }
