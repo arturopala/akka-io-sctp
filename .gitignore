@@ -1,3 +1,6 @@
 /.idea/
 target/
 *.class
+
+# added by GitSavvy
+/sctp.sublime-workspace
