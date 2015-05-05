@@ -152,7 +152,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
         } else {
           buffer.flip()
           val streamNumber = messageInfo.streamNumber
-          if (TraceLogging) log.debug(s"Read [$bytesRead] bytes from $streamNumber stream")
+          //if (TraceLogging) log.debug(s"Read [$bytesRead] bytes from stream #$streamNumber")
           val byteString: ByteString = readByteStringMap(streamNumber) match {
             case Some(pbs) => pbs ++ ByteString(buffer)
             case None => ByteString(buffer)
@@ -160,7 +160,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
           if (messageInfo.isComplete()) {
             info.handler ! Received(SctpMessage(byteString, SctpMessageInfo(messageInfo, byteString.length)))
             readByteStringMap(streamNumber) = None
-            if (TraceLogging) log.debug(s"message from stream $streamNumber completed ${byteString.length}")
+            //if (TraceLogging) log.debug(s"Read message from stream #$streamNumber, ${byteString.length} bytes")
             AllRead
           } else {
             readByteStringMap(streamNumber) = Some(byteString)
@@ -198,7 +198,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       val mi = message.info.asMessageInfo
       val writtenBytes = channel.send(buffer, mi)
       if (writtenBytes > 0) {
-        if (TraceLogging) log.debug("Wrote [{}] bytes to channel", writtenBytes)
+        //if (TraceLogging) log.debug(s"Wrote $writtenBytes bytes to channel stream #${message.info.streamNumber}")
         if (!ack.isInstanceOf[NoAck]) commander ! ack
       }
     }
@@ -317,24 +317,25 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       if (not.event().equals(AssociationChangeNotification.AssocChangeEvent.COMM_UP)) {
         val outbound = not.association().maxOutboundStreams()
         val inbound = not.association().maxInboundStreams()
-        log.debug("New association setup with {} outbound streams, and {} inbound streams.", outbound, inbound)
+        if (TraceLogging) log.debug("New association setup {}", not.association())
       }
+      association = Some(not.association())
       HandlerResult.CONTINUE
     }
 
     override def handleNotification(not: ShutdownNotification, log: LoggingAdapter): HandlerResult = {
-      log.debug("The association has been shutdown {}", not)
+      if (TraceLogging) log.debug("The association has been shutdown {}", not.association())
       association = None
       HandlerResult.RETURN
     }
 
     override def handleNotification(not: PeerAddressChangeNotification, log: LoggingAdapter): HandlerResult = {
-      log.debug("The peer address has changed {}", not)
+      if (TraceLogging) log.debug("The peer address has changed {}", not)
       HandlerResult.CONTINUE
     }
 
     override def handleNotification(not: SendFailedNotification, log: LoggingAdapter): HandlerResult = {
-      log.debug("Send failed {}", not)
+      if (TraceLogging) log.debug("Send failed {}", not)
       HandlerResult.CONTINUE
     }
   }

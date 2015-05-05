@@ -98,8 +98,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
   final case class Connect(remoteAddress: InetSocketAddress,
     localAddress: Option[InetSocketAddress] = None,
     options: immutable.Traversable[SctpSocketOption] = Nil,
-    timeout: Option[FiniteDuration] = None,
-    pullMode: Boolean = false) extends Command
+    timeout: Option[FiniteDuration] = None) extends Command
 
   /**
    * The Bind message is send to the SCTP manager actor, which is obtained via
@@ -124,8 +123,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     localAddress: InetSocketAddress,
     remoteAddresses: Set[InetAddress] = Set.empty,
     backlog: Int = 100,
-    options: immutable.Traversable[SctpSocketOption] = Nil,
-    pullMode: Boolean = false) extends Command
+    options: immutable.Traversable[SctpSocketOption] = Nil) extends Command
 
   /**
    * This message must be sent to a SCTP connection actor after receiving the

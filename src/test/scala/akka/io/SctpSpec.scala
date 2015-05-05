@@ -131,14 +131,27 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       for (id <- 0 until map.size) receiveAndAssert(id)
       theend
     }
-    "receive and send messages" in new SctpServerWithConnectedHandlerActorTest(Props(classOf[TestReverseEchoActor])) {
+    "receive and send messages as a server" in new SctpServerWithConnectedHandlerActorTest(Props(classOf[TestReverseEchoActor])) {
       implicit val generatorDrivenConfig = PropertyCheckConfig(minSize = 1, maxSize = 100 * 1024, minSuccessful = 100, workers = 1)
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
-          println(s"sending ${array.length}")
-          sendMessage(client, array, 0)
+          val id = nsn.getAndIncrement
+          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
           val (bytes, messageInfo) = receiveMessage(client)
           bytes should contain theSameElementsInOrderAs array
+      }
+      theend
+    }
+    "send and receive messages as a client" in new SctpClientTest {
+      case object Ack extends Event
+      implicit val generatorDrivenConfig = PropertyCheckConfig(minSize = 1, maxSize = 100 * 1024, minSuccessful = 100, workers = 1)
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val id = nsn.getAndIncrement
+          sctpOutgoingConnectionActor.tell(Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id), Ack), clientProbe.ref)
+          val received = serverHandler.expectMsgType[Received](timeout)
+          received.message.data should contain theSameElementsInOrderAs array
+          clientProbe.expectMsg(Ack)
       }
       theend
     }
@@ -161,6 +174,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     bound.localAddresses should have size 1
     bound.localAddresses.head.getHostString should be(LOCALHOST)
     bound.port should be > 0
+    val nsn = new AtomicInteger(0)
   }
 
   abstract class SctpServerWithSingleConnectedClientTest extends SctpServerBoundTest {
@@ -175,8 +189,8 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     actor.reply(Register(handler.ref))
     import scala.collection.JavaConversions._
     val localAddresses = clientChannel.getAllLocalAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet
+    connected.remoteAddresses should contain theSameElementsAs localAddresses
     val client = Client(clientChannel, handler, localAddresses, sctpIncomingConnectionActor)
-    val nsn = new AtomicInteger(0)
 
     override def theend = {
       client.close(system)
@@ -197,9 +211,9 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       actor.reply(Register(handler.ref))
       import scala.collection.JavaConversions._
       val localAddresses = clientChannel.getAllLocalAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet
+      connected.remoteAddresses should contain theSameElementsAs localAddresses
       Client(clientChannel, handler, localAddresses, sctpIncomingConnectionActor)
     }
-    val nsn = new AtomicInteger(0)
 
     override def theend = {
       clients.foreach(_.close(system))
@@ -219,10 +233,35 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     actor.reply(Register(handler))
     import scala.collection.JavaConversions._
     val localAddresses = clientChannel.getAllLocalAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet
+    connected.remoteAddresses should contain theSameElementsAs localAddresses
     val client = Client(clientChannel, null, localAddresses, sctpIncomingConnectionActor)
 
     override def theend = {
       system stop handler
+      super.theend
+    }
+  }
+
+  abstract class SctpClientTest extends SctpServerBoundTest {
+    val clientProbe = TestProbe()
+    val serverHandler = TestProbe()
+    IO(Sctp).tell(Connect(bound.localAddresses.head), clientProbe.ref)
+    actor.expectMsgType[Connected](timeout)
+    actor.reply(Register(serverHandler.ref))
+    val connected = clientProbe.expectMsgType[Connected](timeout)
+    val sctpOutgoingConnectionActor = clientProbe.lastSender
+    connected.association should not be (null)
+    connected.remoteAddresses should not be empty
+    connected.localAddresses should not be empty
+    val clientHandler = TestProbe()
+    clientProbe.reply(Register(clientHandler.ref))
+    import scala.collection.JavaConversions._
+    val localAddresses = connected.localAddresses
+
+    override def theend = {
+      system stop clientProbe.ref
+      system stop serverHandler.ref
+      system stop clientHandler.ref
       super.theend
     }
   }
