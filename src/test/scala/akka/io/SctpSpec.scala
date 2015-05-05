@@ -125,6 +125,8 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
           val expected = map(messageInfo.payloadProtocolID)
           bytes should have size expected.length
           bytes should contain theSameElementsInOrderAs expected
+          messageInfo.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
+          messageInfo.payloadProtocolID should be(id)
         }
         actor.expectMsg(Ack)
       }
@@ -136,9 +138,11 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
-          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
+          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id)
           val (bytes, messageInfo) = receiveMessage(client)
           bytes should contain theSameElementsInOrderAs array
+          messageInfo.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
+          messageInfo.payloadProtocolID should be(id)
       }
       theend
     }
@@ -151,6 +155,10 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
           sctpOutgoingConnectionActor.tell(Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id), Ack), clientProbe.ref)
           val received = serverHandler.expectMsgType[Received](timeout)
           received.message.data should contain theSameElementsInOrderAs array
+          received.message.info.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
+          received.message.info.payloadProtocolID should be(id)
+          received.message.info.bytes should be(array.length)
+          localAddresses should contain(received.message.info.address)
           clientProbe.expectMsg(Ack)
       }
       theend
