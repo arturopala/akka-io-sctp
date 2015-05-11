@@ -39,9 +39,9 @@ class EchoSctpServerActor extends Actor {
 	def receive = {
 		case Bound(localAddresses, port) => println(s"SCTP server bound to $localAddresses")
 		case Connected(remoteAddresses, localAddresses, association) => sender ! Register(self)
-		case Received(SctpMessage(data,info)) => 
-			println(s"received ${info.bytes}")
-			sender ! Send(SctpMessage(data, info.streamNumber),Ack)
+		case Received(SctpMessage(payload,SctpMessageInfo(streamNumber, bytes, payloadProtocolID, timeToLive, association, address))) => 
+			println(s"received $bytes bytes from $address on stream #$streamNumber with protocolID=$payloadProtocolID and TTL=$timeToLive")
+			sender ! Send(SctpMessage(payload, streamNumber, payloadProtocolID, timeToLive), Ack)
 	    case Ack => println("response sent.")
 		case msg => println(msg)
 	}
