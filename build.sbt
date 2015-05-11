@@ -1,3 +1,12 @@
+
+name := "akka-io-sctp"
+
+version := "0.1"
+
+organization := "me.arturopala"
+
+licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0"))
+
 scalaVersion := "2.11.6"
 
 val akkaVersion = "2.4-SNAPSHOT"
@@ -18,3 +27,5 @@ libraryDependencies ++= Seq(
 fork in (Test,run) := true
 
 scalariformSettings
+
+publishMavenStyle := true
