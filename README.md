@@ -10,7 +10,7 @@ Add to ```build.sbt``` file:
 
 ## Usage
 
-SCTP driver messages follows existing TCP/UDP convention.
+SCTP driver message flow follows existing TCP/UDP convention (Bind->Bound, Connected->Register, Received, Send)
 
 #### Example echo server:
 
