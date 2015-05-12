@@ -44,6 +44,102 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
       override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SCTP_NODELAY, Boolean.box(on))
     }
 
+    /**
+     *  SCTP_DISABLE_FRAGMENTS
+     *  Enables or disables message fragmentation.
+     *  The value of this socket option is a Boolean that represents whether the option is enabled or disabled.
+     *  If enabled no SCTP message fragmentation will be performed. Instead if a message being sent exceeds the current PMTU size,
+     *  the message will NOT be sent and an error will be indicated to the user.
+     *  It is implementation specific whether or not this option is supported.
+     */
+
+    final case class SctpDisableFragments(on: Boolean) extends SctpSocketOption {
+      override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SCTP_DISABLE_FRAGMENTS, Boolean.box(on))
+    }
+
+    /**
+     *  SCTP_EXPLICIT_COMPLETE
+     *  Enables or disables explicit message completion.
+     *  The value of this socket option is a Boolean that represents whether the option is enabled or disabled.
+     *  When this option is enabled, the send method may be invoked multiple times to a send message.
+     *  The isComplete parameter of the MessageInfo must only be set to true for the final send to indicate that the message is complete.
+     *  If this option is disabled then each individual send invocation is considered complete.
+     *  The default value of the option is false indicating that the option is disabled.
+     *  It is implementation specific whether or not this option is supported.
+     */
+
+    final case class SctpExplicitComplete(on: Boolean) extends SctpSocketOption {
+      override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SCTP_EXPLICIT_COMPLETE, Boolean.box(on))
+    }
+
+    /**
+     *  SCTP_FRAGMENT_INTERLEAVE
+     *  Fragmented interleave controls how the presentation of messages occur for the message receiver.
+     *  This option takes an Integer value. It can be set to a value of 0, 1 or 2.
+     *
+     *  Setting the three levels provides the following receiver interactions:
+     *  <ul>
+     *  <li>level 0 - Prevents the interleaving of any messages.
+     *  <li>level 1 - Allows interleaving of messages that are from different associations.
+     *  <li>level 2 - Allows complete interleaving of messages.
+     *  </ul>
+     *  It is implementation specific whether or not this option is supported.
+     */
+
+    final case class SctpFragmentInterleave(level: Int) extends SctpSocketOption {
+      override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SCTP_FRAGMENT_INTERLEAVE, Int.box(level))
+    }
+
+    /**
+     *  SCTP_PRIMARY_ADDR
+     *  Requests that the local SCTP stack use the given peer address as the association primary.
+     *  The value of this socket option is a SocketAddress that represents the peer address that the local SCTP stack should use as the association primary.
+     *  The address must be one of the association peer's addresses.
+     */
+    final case class SctpPeerPrimaryAddress(address: InetSocketAddress) extends SctpSocketOption {
+      override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SCTP_PRIMARY_ADDR, address)
+    }
+
+    /**
+     *  SCTP_SET_PEER_PRIMARY_ADDR
+     *  Requests that the peer mark the enclosed address as the association primary.
+     *  The value of this socket option is a SocketAddress that represents the local address that the peer should use as its primary address.
+     *  The given address must be one of the association's locally bound addresses.
+     *  It is implementation specific whether or not this option is supported.
+     */
+    final case class SctpLocalPrimaryAddress(address: InetSocketAddress) extends SctpSocketOption {
+      override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SCTP_SET_PEER_PRIMARY_ADDR, address)
+    }
+
+    /**
+     *  SO_SNDBUF
+     *  The size of the socket send buffer.
+     *  The value of this socket option is an Integer that is the size of the socket send buffer in bytes.
+     *  The socket send buffer is an output buffer used by the networking implementation.
+     *  It may need to be increased for high-volume connections.
+     *  The value of the socket option is a hint to the implementation to size the buffer and the actual size may differ.
+     *
+     *  An implementation allows this socket option to be set before the socket is bound or connected.
+     *  Whether an implementation allows the socket send buffer to be changed after the socket is bound is system dependent.
+     */
+    final case class SctpSendBufferSize(size: Int) extends SctpSocketOption {
+      override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SO_SNDBUF, Int.box(size))
+    }
+
+    /**
+     *  SO_RCVBUF
+     *  The size of the socket receive buffer.
+     *  The value of this socket option is an Integer that is the size of the socket receive buffer in bytes.
+     *  The socket receive buffer is an input buffer used by the networking implementation.
+     *  It may need to be increased for high-volume connections or decreased to limit the possible backlog of incoming data.
+     *  The value of the socket option is a hint to the implementation to size the buffer and the actual size may differ.
+     *  An implementation allows this socket option to be set before the socket is bound or connected.
+     *  Whether an implementation allows the socket receive buffer to be changed after the socket is bound is system dependent.
+     */
+    final case class SctpReceiveBufferSize(size: Int) extends SctpSocketOption {
+      override def afterConnect(c: SctpChannel): Unit = c.setOption(SctpStandardSocketOptions.SO_RCVBUF, Int.box(size))
+    }
+
   }
 
   /**
@@ -53,12 +149,21 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
 
   /// SCTP MESSAGE
 
-  final case class SctpMessage(data: ByteString, info: SctpMessageInfo)
-  object SctpMessage {
-    def apply(data: ByteString, streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0): SctpMessage = new SctpMessage(data, SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive))
+  final case class SctpAssociation(id: Int, maxInboundStreams: Int, maxOutboundStreams: Int)
+  object SctpAssociation {
+    def apply(association: Association): SctpAssociation = Option(association) map (a =>
+      new SctpAssociation(a.associationID(), a.maxInboundStreams(), a.maxOutboundStreams())
+    ) getOrElse null
   }
 
-  final case class SctpMessageInfo(streamNumber: Int, bytes: Int, payloadProtocolID: Int, timeToLive: Long, association: Association, address: InetSocketAddress) {
+  final case class SctpMessage(info: SctpMessageInfo, payload: ByteString) {
+    override def toString: String = if (payload.length <= 256) super.toString else s"SctpMessage($info,${payload.take(256)} ...)"
+  }
+  object SctpMessage {
+    def apply(payload: ByteString, streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive), payload)
+  }
+
+  final case class SctpMessageInfo(streamNumber: Int, bytes: Int, payloadProtocolID: Int, timeToLive: Long, association: SctpAssociation, address: InetSocketAddress) {
     def asMessageInfo: MessageInfo = {
       val mi = MessageInfo.createOutgoing(null, streamNumber)
       mi.payloadProtocolID(payloadProtocolID)
@@ -67,7 +172,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     }
   }
   object SctpMessageInfo {
-    def apply(messageInfo: MessageInfo, length: Int): SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), length, messageInfo.payloadProtocolID(), messageInfo.timeToLive(), messageInfo.association(), messageInfo.address().asInstanceOf[InetSocketAddress])
+    def apply(messageInfo: MessageInfo, length: Int): SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), length, messageInfo.payloadProtocolID(), messageInfo.timeToLive(), SctpAssociation(messageInfo.association()), messageInfo.address().asInstanceOf[InetSocketAddress])
     def apply(streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0): SctpMessageInfo = {
       val mi = MessageInfo.createOutgoing(null, streamNumber)
       mi.payloadProtocolID(payloadProtocolID)
@@ -95,10 +200,18 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * @param localAddress optionally specifies a specific address to bind to
    * @param options Please refer to the [[SO]] object for a list of all supported options.
    */
-  final case class Connect(remoteAddress: InetSocketAddress,
-    localAddress: Option[InetSocketAddress] = None,
-    options: immutable.Traversable[SctpSocketOption] = Nil,
-    timeout: Option[FiniteDuration] = None) extends Command
+  final case class Connect(
+      remoteAddress: InetSocketAddress,
+      maxOutboundStreams: Int = 0,
+      maxInboundStreams: Int = 0,
+      localAddress: Option[InetSocketAddress] = None,
+      options: immutable.Traversable[SctpSocketOption] = Nil,
+      timeout: Option[FiniteDuration] = None) extends Command {
+    require(maxInboundStreams >= 0, "maxInboundStreams must be greater or equal to 0")
+    require(maxOutboundStreams >= 0, "maxOutboundStreams must be greater or equal to 0")
+    require(maxInboundStreams <= 65536, "maxInboundStreams must be lower or equal to 65536")
+    require(maxOutboundStreams <= 65536, "maxOutboundStreams must be lower or equal to 65536")
+  }
 
   /**
    * The Bind message is send to the SCTP manager actor, which is obtained via
@@ -119,11 +232,19 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    *
    * @param options Please refer to the [[SO]] object for a list of all supported options.
    */
-  final case class Bind(handler: ActorRef,
-    localAddress: InetSocketAddress,
-    remoteAddresses: Set[InetAddress] = Set.empty,
-    backlog: Int = 100,
-    options: immutable.Traversable[SctpSocketOption] = Nil) extends Command
+  final case class Bind(
+      handler: ActorRef,
+      localAddress: InetSocketAddress,
+      maxInboundStreams: Int = 0,
+      maxOutboundStreams: Int = 0,
+      additionalAddresses: Set[InetAddress] = Set.empty,
+      backlog: Int = 100,
+      options: immutable.Traversable[SctpSocketOption] = Nil) extends Command {
+    require(maxInboundStreams >= 0, "maxInboundStreams must be greater or equal to 0")
+    require(maxOutboundStreams >= 0, "maxOutboundStreams must be greater or equal to 0")
+    require(maxInboundStreams <= 65536, "maxInboundStreams must be lower or equal to 65536")
+    require(maxOutboundStreams <= 65536, "maxOutboundStreams must be lower or equal to 65536")
+  }
 
   /**
    * This message must be sent to a SCTP connection actor after receiving the
@@ -249,7 +370,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * in the [[Bind]] message. The connection is characterized by the `remoteAddresses`
    * and `localAddresses` SCTP endpoints, and `association`.
    */
-  final case class Connected(remoteAddresses: Set[InetSocketAddress], localAddresses: Set[InetSocketAddress], association: Association) extends Event
+  final case class Connected(remoteAddresses: Set[InetSocketAddress], localAddresses: Set[InetSocketAddress], association: SctpAssociation) extends Event
 
   /**
    * Whenever a command cannot be completed, the queried actor will reply with

@@ -18,7 +18,7 @@ import com.sun.nio.sctp.{ SctpChannel, SctpServerChannel, SctpStandardSocketOpti
  *
  * INTERNAL API
  */
-private[io] class SctpOutgoingConnection(_stcp: SctpExt,
+private[io] final class SctpOutgoingConnection(_stcp: SctpExt,
   channelRegistry: ChannelRegistry,
   commander: ActorRef,
   connect: Connect)
@@ -28,6 +28,11 @@ private[io] class SctpOutgoingConnection(_stcp: SctpExt,
   import connect._
 
   context.watch(commander) // sign death pact
+
+  channel.setOption(SctpStandardSocketOptions.SCTP_INIT_MAXSTREAMS,
+    SctpStandardSocketOptions.InitMaxStreams.create(
+      connect.maxInboundStreams,
+      connect.maxOutboundStreams))
 
   options.foreach(_.beforeBind(channel))
   localAddress.foreach(channel.bind)

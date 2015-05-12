@@ -11,7 +11,7 @@ import akka.io.SctpInet.SctpSocketOption
  *
  * INTERNAL API
  */
-private[io] class SctpIncomingConnection(_sctp: SctpExt,
+private[io] final class SctpIncomingConnection(_sctp: SctpExt,
   _channel: SctpChannel,
   registry: ChannelRegistry,
   bindHandler: ActorRef,

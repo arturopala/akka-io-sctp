@@ -35,12 +35,11 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   private[this] var peerClosed = false
   var closedMessage: CloseInformation = _ // for ConnectionClosed message in postStop
   var isOutputShutdown = false
-  val assocHandler = new AssociationHandler()
 
   private[this] var pendingSend: Vector[(Send, ActorRef)] = Vector.empty
   def isPendingSend = !pendingSend.isEmpty
   var association: Option[Association] = Option(channel.association)
-
+  val associationHandler = new AssociationHandler
   val readByteStringMap: MutableMap[Int, Option[ByteString]] = MutableMap.empty.withDefaultValue(None)
 
   // STATES
@@ -131,7 +130,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     commander ! Connected(
       channel.getRemoteAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet,
       channel.getAllLocalAddresses.map(_.asInstanceOf[InetSocketAddress]).toSet,
-      channel.association)
+      SctpAssociation(channel.association))
 
     context.setReceiveTimeout(RegisterTimeout)
 
@@ -144,7 +143,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   def doRead(info: ConnectionInfo, closeCommander: Option[ActorRef]): Unit = {
     @tailrec def innerRead(buffer: ByteBuffer): ReadResult = {
       buffer.clear()
-      val messageInfo: MessageInfo = channel.receive(buffer, log, assocHandler)
+      val messageInfo: MessageInfo = channel.receive(buffer, log, associationHandler)
       if (messageInfo != null) {
         val bytesRead = messageInfo.bytes
         if (bytesRead < 0) {
@@ -152,15 +151,15 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
         } else {
           buffer.flip()
           val streamNumber = messageInfo.streamNumber
-          //if (TraceLogging) log.debug(s"Read [$bytesRead] bytes from stream #$streamNumber")
+          if (TraceLogging) log.debug(s"Read [$bytesRead] bytes from stream #$streamNumber")
           val byteString: ByteString = readByteStringMap(streamNumber) match {
             case Some(pbs) => pbs ++ ByteString(buffer)
             case None => ByteString(buffer)
           }
           if (messageInfo.isComplete()) {
-            info.handler ! Received(SctpMessage(byteString, SctpMessageInfo(messageInfo, byteString.length)))
+            info.handler ! Received(SctpMessage(SctpMessageInfo(messageInfo, byteString.length), byteString))
             readByteStringMap(streamNumber) = None
-            //if (TraceLogging) log.debug(s"Read message from stream #$streamNumber, ${byteString.length} bytes")
+            if (TraceLogging) log.debug(s"Read message from stream #$streamNumber, ${byteString.length} bytes")
             AllRead
           } else {
             readByteStringMap(streamNumber) = Some(byteString)
@@ -191,14 +190,14 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   def doWrite(info: ConnectionInfo): Unit = {
     def writeToChannel(_buffer: ByteBuffer, message: SctpMessage, ack: Event, commander: ActorRef): Unit = {
-      val length = message.data.length
+      val length = message.payload.length
       val buffer = if (length > DirectBufferSize) ByteBuffer.allocateDirect(length) else _buffer
-      val copied = message.data.copyToBuffer(buffer)
+      val copied = message.payload.copyToBuffer(buffer)
       buffer.flip()
       val mi = message.info.asMessageInfo
       val writtenBytes = channel.send(buffer, mi)
       if (writtenBytes > 0) {
-        //if (TraceLogging) log.debug(s"Wrote $writtenBytes bytes to channel stream #${message.info.streamNumber}")
+        if (TraceLogging) log.debug(s"Wrote $writtenBytes bytes to channel stream #${message.info.streamNumber}")
         if (!ack.isInstanceOf[NoAck]) commander ! ack
       }
     }
@@ -281,7 +280,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     try {
       channel.setOption(SctpStandardSocketOptions.SO_LINGER, Int.box(0))
       isOutputShutdown = true
-    } // causes the following close() to send TCP RST
+    } // causes the following close() to send SCTP RST
     catch {
       case NonFatal(e) ⇒
         // setSoLinger can fail due to http://bugs.sun.com/view_bug.do?bug_id=6799574
@@ -312,11 +311,9 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   override def postRestart(reason: Throwable): Unit =
     throw new IllegalStateException("Restarting not supported for connection actors.")
 
-  class AssociationHandler extends AbstractNotificationHandler[LoggingAdapter] {
+  final class AssociationHandler extends AbstractNotificationHandler[LoggingAdapter] {
     override def handleNotification(not: AssociationChangeNotification, log: LoggingAdapter): HandlerResult = {
       if (not.event().equals(AssociationChangeNotification.AssocChangeEvent.COMM_UP)) {
-        val outbound = not.association().maxOutboundStreams()
-        val inbound = not.association().maxInboundStreams()
         if (TraceLogging) log.debug("New association setup {}", not.association())
       }
       association = Some(not.association())

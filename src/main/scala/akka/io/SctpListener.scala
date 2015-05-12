@@ -1,7 +1,7 @@
 package akka.io
 
 import java.nio.channels.{ SelectionKey }
-import com.sun.nio.sctp.{ SctpChannel, SctpServerChannel, SctpMultiChannel }
+import com.sun.nio.sctp.{ SctpChannel, SctpServerChannel, SctpMultiChannel, SctpStandardSocketOptions }
 import java.net.InetSocketAddress
 import scala.annotation.tailrec
 import scala.util.control.NonFatal
@@ -26,7 +26,7 @@ private[io] object SctpListener {
 /**
  * INTERNAL API
  */
-private[io] class SctpListener(selectorRouter: ActorRef,
+private[io] final class SctpListener(selectorRouter: ActorRef,
   sctp: SctpExt,
   channelRegistry: ChannelRegistry,
   bindCommander: ActorRef,
@@ -41,6 +41,10 @@ private[io] class SctpListener(selectorRouter: ActorRef,
 
   val sctpServerChannel: SctpServerChannel = SctpServerChannel.open
   sctpServerChannel.configureBlocking(false)
+  sctpServerChannel.setOption(SctpStandardSocketOptions.SCTP_INIT_MAXSTREAMS,
+    SctpStandardSocketOptions.InitMaxStreams.create(
+      bind.maxInboundStreams,
+      bind.maxOutboundStreams))
 
   var acceptLimit = BatchAcceptLimit
 
@@ -48,7 +52,7 @@ private[io] class SctpListener(selectorRouter: ActorRef,
     try {
       bind.options.foreach(_.beforeBind(sctpServerChannel))
       sctpServerChannel.bind(bind.localAddress, bind.backlog)
-      bind.remoteAddresses foreach {
+      bind.additionalAddresses foreach {
         sctpServerChannel.bindAddress(_)
       }
       val ret = sctpServerChannel.getAllLocalAddresses() map {
@@ -62,7 +66,7 @@ private[io] class SctpListener(selectorRouter: ActorRef,
     } catch {
       case NonFatal(e) ⇒
         bindCommander ! bind.failureMessage
-        log.warning("Bind failed for SCTP sctp server channel on endpoint [{},{}]", bind.localAddress, bind.remoteAddresses)
+        log.warning("Bind failed for SCTP sctp server channel on endpoint [{},{}]", bind.localAddress, bind.additionalAddresses)
         context.stop(self)
         Set.empty
     }

@@ -24,7 +24,8 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   val timeout = 500.millis.dilated(actorSystem)
   val LOCALHOST = "127.0.0.1"
   val NO_OF_SIMULTANEOUS_SCTP_CLIENTS = 5
-  val SCTP_CLIENT_MAX_NO_OF_STREAMS = 10
+  val SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS = 25
+  val SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS = 36
   val byteArrayGenerator = Gen.nonEmptyContainerOf[Array, Byte](Arbitrary.arbitrary[Byte])
   implicit override val generatorDrivenConfig = PropertyCheckConfig(minSize = 1, maxSize = 100 * 1024, minSuccessful = 25, workers = 5)
 
@@ -66,7 +67,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
           map(id) = array
-          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id)
+          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id)
       }
       handler.receiveN(generatorDrivenConfig.minSuccessful, timeout * 100) foreach {
         case Received(message) =>
@@ -75,7 +76,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
           message.info.address should not be (null)
           client.localAddresses should contain(message.info.address)
           val bytes = map(message.info.payloadProtocolID)
-          message.data.toArray[Byte] should contain theSameElementsInOrderAs bytes
+          message.payload.toArray[Byte] should contain theSameElementsInOrderAs bytes
       }
       theend
     }
@@ -83,7 +84,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
-          sendAndAssertMessage(clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS), array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id)
+          sendAndAssertMessage(clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS), array, id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id)
       }
       theend
     }
@@ -94,7 +95,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
           map(id) = array
-          sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id), Ack)
+          sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id), Ack)
       }
       def receiveAndAssert: Unit = {
         val (bytes, messageInfo) = receiveMessage(client)
@@ -116,7 +117,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
           val id = nsn.getAndIncrement
           map(id) = array
           val client = clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS)
-          client.sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id), Ack)
+          client.sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id), Ack)
       }
       def receiveAndAssert(id: Int): Unit = {
         val client = clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS)
@@ -125,7 +126,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
           val expected = map(messageInfo.payloadProtocolID)
           bytes should have size expected.length
           bytes should contain theSameElementsInOrderAs expected
-          messageInfo.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
+          messageInfo.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
           messageInfo.payloadProtocolID should be(id)
         }
         actor.expectMsg(Ack)
@@ -138,11 +139,15 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
-          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id)
+          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id)
           val (bytes, messageInfo) = receiveMessage(client)
           bytes should contain theSameElementsInOrderAs array
-          messageInfo.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
+          messageInfo.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
           messageInfo.payloadProtocolID should be(id)
+          messageInfo.association should not be (null)
+          messageInfo.association.associationID should be > -1
+          messageInfo.association.maxInboundStreams should be(SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
+          messageInfo.association.maxOutboundStreams should be(SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS)
       }
       theend
     }
@@ -152,12 +157,15 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
-          sctpOutgoingConnectionActor.tell(Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_STREAMS, id), Ack), clientProbe.ref)
+          sctpOutgoingConnectionActor.tell(Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, id), Ack), clientProbe.ref)
           val received = serverHandler.expectMsgType[Received](timeout)
-          received.message.data should contain theSameElementsInOrderAs array
-          received.message.info.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_STREAMS)
+          received.message.payload should contain theSameElementsInOrderAs array
+          received.message.info.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS)
           received.message.info.payloadProtocolID should be(id)
           received.message.info.bytes should be(array.length)
+          received.message.info.association.id should be > -1
+          received.message.info.association.maxInboundStreams should be(SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS)
+          received.message.info.association.maxOutboundStreams should be(SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
           localAddresses should contain(received.message.info.address)
           clientProbe.expectMsg(Ack)
       }
@@ -177,7 +185,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   abstract class ScptTest extends ActorSystemTest
 
   abstract class SctpServerBoundTest extends ScptTest {
-    IO(Sctp) ! Bind(actor.ref, temporaryServerAddress())
+    IO(Sctp) ! Bind(actor.ref, temporaryServerAddress(), SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
     val bound = actor.expectMsgType[Bound](timeout)
     bound.localAddresses should have size 1
     bound.localAddresses.head.getHostString should be(LOCALHOST)
@@ -186,13 +194,16 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   }
 
   abstract class SctpServerWithSingleConnectedClientTest extends SctpServerBoundTest {
-    val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_STREAMS, SCTP_CLIENT_MAX_NO_OF_STREAMS)
+    val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
     val connected = actor.expectMsgType[Connected](timeout)
     val sctpIncomingConnectionActor = actor.lastSender
     connected.association should not be (null)
     connected.remoteAddresses should not be empty
     connected.localAddresses should have size 1
     connected.localAddresses.head.getHostString should be(LOCALHOST)
+    connected.association.id should be > -1
+    connected.association.maxInboundStreams should be(SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS)
+    connected.association.maxOutboundStreams should be(SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
     val handler = TestProbe()
     actor.reply(Register(handler.ref))
     import scala.collection.JavaConversions._
@@ -208,13 +219,16 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
 
   abstract class SctpServerWithMultipleConnectedClientTest(numberOfClients: Int) extends SctpServerBoundTest {
     val clients = for (i <- 1 to numberOfClients) yield {
-      val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_STREAMS, SCTP_CLIENT_MAX_NO_OF_STREAMS)
+      val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
       val connected = actor.expectMsgType[Connected](timeout)
       val sctpIncomingConnectionActor = actor.lastSender
       connected.association should not be (null)
       connected.remoteAddresses should not be empty
       connected.localAddresses should have size 1
       connected.localAddresses.head.getHostString should be(LOCALHOST)
+      connected.association.id should be > -1
+      connected.association.maxInboundStreams should be(SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS)
+      connected.association.maxOutboundStreams should be(SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
       val handler = TestProbe()
       actor.reply(Register(handler.ref))
       import scala.collection.JavaConversions._
@@ -230,7 +244,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   }
 
   abstract class SctpServerWithConnectedHandlerActorTest(props: Props) extends SctpServerBoundTest {
-    val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_STREAMS, SCTP_CLIENT_MAX_NO_OF_STREAMS)
+    val clientChannel = SctpChannel.open(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS)
     val connected = actor.expectMsgType[Connected](timeout)
     val sctpIncomingConnectionActor = actor.lastSender
     connected.association should not be (null)
@@ -253,7 +267,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   abstract class SctpClientTest extends SctpServerBoundTest {
     val clientProbe = TestProbe()
     val serverHandler = TestProbe()
-    IO(Sctp).tell(Connect(bound.localAddresses.head), clientProbe.ref)
+    IO(Sctp).tell(Connect(bound.localAddresses.head, SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS), clientProbe.ref)
     actor.expectMsgType[Connected](timeout)
     actor.reply(Register(serverHandler.ref))
     val connected = clientProbe.expectMsgType[Connected](timeout)
@@ -292,7 +306,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       'bytes(bytes.length),
       'payloadProtocolID(payloadProtocolID)
     )
-    received.message.data.toArray[Byte] should contain theSameElementsInOrderAs bytes
+    received.message.payload.toArray[Byte] should contain theSameElementsInOrderAs bytes
     client.localAddresses should contain(received.message.info.address)
   }
 
