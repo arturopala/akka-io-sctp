@@ -11,6 +11,8 @@ Like TCP, SCTP is a session-oriented mechanism, meaning that a relationship is c
 
 Unlike TCP, SCTP provides a number of functions that are critical for telephony signaling transport, and at the same time can potentially benefit other applications needing transport with additional performance and reliability.
 
+The name Stream Control Transmission Protocol is derived from the multi-streaming function provided by SCTP.  This feature allows data to be partitioned into multiple streams that have the property of independently sequenced delivery, so that message loss in any one stream will only initially affect delivery within that stream, and not delivery in other streams.
+
 SCTP offers the following services to its users:
 
 -   acknowledged error-free non-duplicated transfer of user data,
