@@ -3,9 +3,13 @@
 
 ## About SCTP - Stream Control Transmission Protocol
 
-SCTP is designed to transport PSTN signaling messages over IP networks, but is capable of broader applications.
+The Stream Control Transmission Protocol (SCTP) is a IP transport protocol, existing at an equivalent level with UDP (User Datagram Protocol) and TCP (Transmission Control Protocol), which provide transport layer functions to  Internet applications.
 
-SCTP is a reliable transport protocol operating on top of a connectionless packet network such as IP.  It offers the following services to its users:
+Like TCP, SCTP provides a reliable transport service, ensuring that data is transported across the network without error and in sequence. Like TCP, SCTP is a session-oriented mechanism, meaning that a relationship is created between the endpoints of an SCTP association prior to data being transmitted, and this relationship is maintained until all data transmission has been successfully completed.
+
+Unlike TCP, SCTP provides a number of functions that are critical for telephony signaling transport, and at the same time can potentially benefit other applications needing transport with additional performance and reliability.
+
+SCTP offers the following services to its users:
 
 -   acknowledged error-free non-duplicated transfer of user data,
 -   data fragmentation to conform to discovered path MTU size,
