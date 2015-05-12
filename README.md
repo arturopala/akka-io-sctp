@@ -36,7 +36,7 @@ Add to ```build.sbt``` file:
 
 ## Usage
 
-SCTP driver message flow follows existing TCP/UDP convention (Bind->Bound, Connected->Register, Received, Send)
+SCTP driver message flow follows an existing TCP/UDP convention (Bind->Bound, Connected->Register, Received, Send)
 
 #### Example echo server:
 
