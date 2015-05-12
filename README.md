@@ -40,8 +40,7 @@ SCTP driver message flow follows existing TCP/UDP convention (Bind->Bound, Conne
 
 #### Example echo server:
 
-```
-
+```scala
 import akka.actor._
 import akka.io._
 import java.net.InetSocketAddress
