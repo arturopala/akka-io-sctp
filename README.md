@@ -67,12 +67,12 @@ class EchoSctpServerActor extends Actor {
 	object Ack extends Event
 
 	implicit val system = context.system
-	IO(Sctp) ! Bind(self, new InetSocketAddress(8008))
+	IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 65535, 65535)
 
 	def receive = {
 		case Bound(localAddresses, port) => println(s"SCTP server bound to $localAddresses")
 		case Connected(remoteAddresses, localAddresses, association) => sender ! Register(self)
-		case Received(SctpMessage(payload,SctpMessageInfo(streamNumber, bytes, payloadProtocolID, timeToLive, association, address))) => 
+		case Received(SctpMessage(SctpMessageInfo(streamNumber, bytes, payloadProtocolID, timeToLive, association, address),payload)) => 
 			println(s"received $bytes bytes from $address on stream #$streamNumber with protocolID=$payloadProtocolID and TTL=$timeToLive")
 			sender ! Send(SctpMessage(payload, streamNumber, payloadProtocolID, timeToLive), Ack)
 	    case Ack => println("response sent.")
