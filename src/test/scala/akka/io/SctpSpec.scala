@@ -67,7 +67,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
           map(id) = array
-          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id)
+          sendMessage(client, array, id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id, 5000)
       }
       handler.receiveN(generatorDrivenConfig.minSuccessful, timeout * 100) foreach {
         case Received(message) =>
@@ -288,9 +288,10 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     }
   }
 
-  def sendMessage(client: Client, bytes: Array[Byte], streamNumber: Int, payloadProtocolID: Int = 0) = {
+  def sendMessage(client: Client, bytes: Array[Byte], streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0) = {
     val messageInfo = MessageInfo.createOutgoing(null, streamNumber)
     messageInfo.payloadProtocolID(payloadProtocolID)
+    messageInfo.timeToLive(timeToLive)
     val buf = ByteBuffer.allocateDirect(bytes.length)
     buf.put(bytes)
     buf.flip()
