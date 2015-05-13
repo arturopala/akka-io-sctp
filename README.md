@@ -25,7 +25,7 @@ The design of SCTP includes appropriate congestion avoidance behavior and resist
 
 ### Specs
 
--   [RFC 2960](http://www.ietf.org/rfc/rfc2960.txt) Stream Control Transmission Protocol.
+-   [RFC 4960](http://www.ietf.org/rfc/rfc4960.txt) Stream Control Transmission Protocol.
 -   [RFC 3257](http://www.ietf.org/rfc/rfc3257.txt) Stream Control Transmission Protocol Applicability Statement.
 -   [RFC 3286](http://www.ietf.org/rfc/rfc3286.txt) An Introduction to the Stream Control Transmission Protocol (SCTP).
 
