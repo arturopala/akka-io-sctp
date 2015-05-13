@@ -258,7 +258,8 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   def stopWith(closeInfo: CloseInformation): Unit = {
     closedMessage = closeInfo
-    context.stop(self)
+    //context.stop(self)
+    self ! PoisonPill
   }
 
   override def postStop(): Unit = {

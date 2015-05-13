@@ -7,7 +7,20 @@ organization := "me.arturopala"
 
 licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0"))
 
+startYear := Some(2015)
+
+description := "Akka I/O driver for SCTP protocol based on Oracle JDK 7/8 SCTP support"
+
 scalaVersion := "2.11.6"
+
+developers := List(Developer("arturopala","Artur Opala","opala.artur@gmail.com",url("https://pl.linkedin.com/in/arturopala")))
+
+scmInfo := Some(
+  ScmInfo(
+    url("https://github.com/arturopala/akka-io-sctp"),
+    "git@github.com:arturopala/akka-io-sctp.git"
+  )
+)
 
 val akkaVersion = "2.4-SNAPSHOT"
 
