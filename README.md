@@ -1,6 +1,3 @@
-
-[![Build Status](https://semaphoreci.com/api/v1/projects/76e5852b-4c4c-444b-81db-ccc2ac3fc83a/423391/badge.svg)](https://semaphoreci.com/arturopala/akka-io-sctp)      
-
 # akka-io-sctp
 [Akka I/O](http://doc.akka.io/docs/akka/snapshot/scala/io.html) driver for [SCTP](http://en.wikipedia.org/wiki/Stream_Control_Transmission_Protocol) protocol based on [Oracle JDK 7/8 SCTP support](http://www.oracle.com/technetwork/articles/javase/index-139946.html).
 
