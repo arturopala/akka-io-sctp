@@ -62,22 +62,26 @@ object EchoSctpServer {
 
 class EchoSctpServerActor extends Actor {
 
-	import Sctp._
+  import Sctp._
 
-	object Ack extends Event
+  case class Ack(message: SctpMessage) extends Event
 
-	implicit val system = context.system
-	IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 65535, 65535)
+  implicit val system = context.system
+  IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 1024, 1024)
 
-	def receive = {
-		case Bound(localAddresses, port) => println(s"SCTP server bound to $localAddresses")
-		case Connected(remoteAddresses, localAddresses, association) => sender ! Register(self)
-		case Received(SctpMessage(SctpMessageInfo(streamNumber, bytes, payloadProtocolID, timeToLive, association, address),payload)) => 
-			println(s"received $bytes bytes from $address on stream #$streamNumber with protocolID=$payloadProtocolID and TTL=$timeToLive")
-			sender ! Send(SctpMessage(payload, streamNumber, payloadProtocolID, timeToLive), Ack)
-	    case Ack => println("response sent.")
-		case msg => println(msg)
-	}
+  def receive = {
+    case Bound(localAddresses, port) => println(s"SCTP server bound to $localAddresses")
+    case Connected(remoteAddresses, localAddresses, association) =>
+      println(s"new connection accepted from $remoteAddresses assoc=${association.id}")
+      sender ! Register(self, Some(self))
+    case Received(SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive, unordered, bytes, association, address), payload)) =>
+      println(s"received $bytes bytes from $address on stream #$streamNumber with protocolID=$payloadProtocolID and TTL=$timeToLive and assoc=${association.id}")
+      val msg = SctpMessage(payload, streamNumber, payloadProtocolID, timeToLive, unordered)
+      sender ! Send(msg, Ack(msg))
+    case Ack(msg) => println(s"response sent ${msg.info}")
+    case n: Notification => println(n)
+    case msg => println(msg)
+  }
 
 }
 ```
