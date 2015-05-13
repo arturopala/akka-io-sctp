@@ -4,10 +4,10 @@ import java.net.{ SocketException, InetSocketAddress }
 import java.nio.channels.SelectionKey._
 import java.io.{ FileInputStream, IOException }
 import java.nio.channels.{ FileChannel }
-import com.sun.nio.sctp._
+import com.sun.nio.sctp.{ SctpChannel, HandlerResult, MessageInfo, SctpStandardSocketOptions, AbstractNotificationHandler }
 import java.nio.ByteBuffer
 import scala.annotation.tailrec
-import scala.collection.immutable
+import scala.collection.immutable.{ Queue, Traversable }
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
 import akka.actor._
@@ -32,21 +32,19 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   import SctpConnection._
   import scala.collection.JavaConversions._
 
-  private[this] var peerClosed = false
-  var closedMessage: CloseInformation = _ // for ConnectionClosed message in postStop
-  var isOutputShutdown = false
-
-  private[this] var pendingSend: Vector[(Send, ActorRef)] = Vector.empty
-  def isPendingSend = !pendingSend.isEmpty
-  var association: Option[Association] = Option(channel.association)
-  val associationHandler = new AssociationHandler
   val readByteStringMap: MutableMap[Int, Option[ByteString]] = MutableMap.empty.withDefaultValue(None)
+  def isPendingSend = !pendingSendQueue.isEmpty
+
+  private[this] var pendingSendQueue: Queue[(Send, ActorRef)] = Queue.empty
+  private[this] var closedMessage: CloseInformation = _ // for ConnectionClosed message in postStop
+  private[this] var isLocalShutdown = false
+  private[this] var isAssociationClosed = false
 
   // STATES
 
   /** connection established, waiting for registration from user handler */
   def waitingForRegistration(registration: ChannelRegistration, commander: ActorRef): Receive = {
-    case Register(handler, keepOpenOnPeerClosed) ⇒
+    case Register(handler, notificationHandlerOpt) ⇒
       // up to this point we've been watching the commander,
       // but since registration is now complete we only need to watch the handler from here on
       if (handler != commander) {
@@ -54,15 +52,14 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
         context.watch(handler)
       }
       if (TraceLogging) log.debug("[{}] registered as connection handler", handler)
-
-      val info = ConnectionInfo(registration, handler, keepOpenOnPeerClosed)
+      val info = ConnectionInfo(registration, handler, new NotificationHandler(notificationHandlerOpt))
       info.registration.disableInterest(OP_READ)
-      doRead(info, None) // immediately try reading
       context.setReceiveTimeout(Duration.Undefined)
       context.become(connected(info))
+      doRead(info, None) // immediately try reading
 
     case cmd: CloseCommand ⇒
-      val info = ConnectionInfo(registration, commander, keepOpenOnPeerClosed = false)
+      val info = ConnectionInfo(registration, commander, new NotificationHandler(None))
       handleClose(info, Some(sender()), cmd.event)
 
     case ReceiveTimeout ⇒
@@ -79,22 +76,13 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       case cmd: CloseCommand ⇒ handleClose(info, Some(sender()), cmd.event)
     }
 
-  /** the peer sent EOF first, but we may still want to send */
-  def peerSentEOF(info: ConnectionInfo): Receive =
-    handleWriteMessages(info) orElse {
-      case cmd: CloseCommand ⇒ handleClose(info, Some(sender()), cmd.event)
-    }
-
   /** connection is closing but a write has to be finished first */
   def closingWithPendingWrite(info: ConnectionInfo, closeCommander: Option[ActorRef],
     closedEvent: ConnectionClosed): Receive = {
     case ChannelReadable ⇒ doRead(info, closeCommander)
-
     case ChannelWritable ⇒
-      doWrite(info)
-      if (!isPendingSend) // writing is now finished
-        handleClose(info, closeCommander, closedEvent)
-
+      while (isPendingSend) doWrite(info)
+      handleClose(info, closeCommander, closedEvent)
     case Abort ⇒ handleClose(info, Some(sender()), Aborted)
   }
 
@@ -105,11 +93,9 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   }
 
   def handleWriteMessages(info: ConnectionInfo): Receive = {
-    case ChannelWritable ⇒
-      doWrite(info)
-
+    case ChannelWritable ⇒ doWrite(info)
     case send: Send ⇒
-      pendingSend = pendingSend :+ (send, sender())
+      pendingSendQueue = pendingSendQueue.enqueue((send, sender()))
       info.registration.enableInterest(OP_WRITE)
   }
 
@@ -117,7 +103,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
   /** used in subclasses to start the common machinery above once a channel is connected */
   def completeConnect(registration: ChannelRegistration, commander: ActorRef,
-    options: immutable.Traversable[SctpSocketOption]): Unit = {
+    options: Traversable[SctpSocketOption]): Unit = {
     // Turn off Nagle's algorithm by default
     try channel.setOption(SctpStandardSocketOptions.SCTP_NODELAY, Boolean.box(true)) catch {
       case e: SocketException ⇒
@@ -143,7 +129,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   def doRead(info: ConnectionInfo, closeCommander: Option[ActorRef]): Unit = {
     @tailrec def innerRead(buffer: ByteBuffer): ReadResult = {
       buffer.clear()
-      val messageInfo: MessageInfo = channel.receive(buffer, log, associationHandler)
+      val messageInfo: MessageInfo = channel.receive(buffer, log, info.notificationHandler)
       if (messageInfo != null) {
         val bytesRead = messageInfo.bytes
         if (bytesRead < 0) {
@@ -160,89 +146,70 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
             info.handler ! Received(SctpMessage(SctpMessageInfo(messageInfo, byteString.length), byteString))
             readByteStringMap(streamNumber) = None
             if (TraceLogging) log.debug(s"Read message from stream #$streamNumber, ${byteString.length} bytes")
-            AllRead
+            if (isAssociationClosed) EndOfStream else if (AllowChainingReads) innerRead(buffer) else NothingToRead
           } else {
             readByteStringMap(streamNumber) = Some(byteString)
             innerRead(buffer)
           }
         }
-      } else {
-        association match {
-          case None => EndOfStream
-          case Some(_) => AllRead
-        }
-      }
+      } else if (isAssociationClosed) EndOfStream else NothingToRead
     }
     val buffer = bufferPool.acquire()
     try innerRead(buffer) match {
-      case AllRead ⇒
+      case NothingToRead ⇒
         info.registration.enableInterest(OP_READ)
-      case EndOfStream if isOutputShutdown ⇒
+      case EndOfStream if isLocalShutdown ⇒
         if (TraceLogging) log.debug("Read returned end-of-stream, our side already closed")
         doCloseConnection(info.handler, closeCommander, ConfirmedClosed)
       case EndOfStream ⇒
         if (TraceLogging) log.debug("Read returned end-of-stream, our side not yet closed")
         handleClose(info, closeCommander, PeerClosed)
     } catch {
-      case e: IOException ⇒ handleError(info.handler, e)
+      case e: Throwable ⇒ handleError(info.handler, e)
     } finally bufferPool.release(buffer)
   }
 
   def doWrite(info: ConnectionInfo): Unit = {
-    def writeToChannel(_buffer: ByteBuffer, message: SctpMessage, ack: Event, commander: ActorRef): Unit = {
+    @tailrec def innerWrite(buffer: ByteBuffer): WriteResult = {
+      buffer.clear()
+      val ((Send(message, ack), commander), tail) = pendingSendQueue.dequeue
       val length = message.payload.length
-      val buffer = if (length > DirectBufferSize) ByteBuffer.allocateDirect(length) else _buffer
-      val copied = message.payload.copyToBuffer(buffer)
-      buffer.flip()
+      val buf = if (length > buffer.capacity) ByteBuffer.allocateDirect(length) else buffer
+      val copied = message.payload.copyToBuffer(buf)
+      buf.flip()
       val mi = message.info.asMessageInfo
-      val writtenBytes = channel.send(buffer, mi)
+      val writtenBytes = channel.send(buf, mi)
       if (writtenBytes > 0) {
         if (TraceLogging) log.debug(s"Wrote $writtenBytes bytes to channel stream #${message.info.streamNumber}")
         if (!ack.isInstanceOf[NoAck]) commander ! ack
       }
+      pendingSendQueue = tail
+      if (AllowChainingWrites && isPendingSend) innerWrite(buffer) else NothingToWrite
     }
     if (isPendingSend) {
       val buffer = bufferPool.acquire()
-      try {
-        val (Send(message, ack), commander) = pendingSend.head
-        pendingSend = pendingSend.tail
-        writeToChannel(buffer, message, ack, commander)
-        if (isPendingSend) {
+      try innerWrite(buffer) match {
+        case NothingToWrite =>
           info.registration.enableInterest(OP_WRITE)
-        }
       } catch {
-        case e: IOException ⇒ handleError(info.handler, e)
+        case e: Throwable ⇒ handleError(info.handler, e)
       } finally bufferPool.release(buffer)
     }
   }
 
-  def closeReason =
-    if (isOutputShutdown) ConfirmedClosed
-    else PeerClosed
+  def closeReason = if (isLocalShutdown) ConfirmedClosed else PeerClosed
 
   def handleClose(info: ConnectionInfo, closeCommander: Option[ActorRef],
     closedEvent: ConnectionClosed): Unit = closedEvent match {
     case Aborted ⇒
       if (TraceLogging) log.debug("Got Abort command. RESETing connection.")
       doCloseConnection(info.handler, closeCommander, closedEvent)
-    case PeerClosed if info.keepOpenOnPeerClosed ⇒
-      // report that peer closed the connection
-      info.handler ! PeerClosed
-      // used to check if peer already closed its side later
-      peerClosed = true
-      context.become(peerSentEOF(info))
     case _ if isPendingSend ⇒ // finish writing first
       if (TraceLogging) log.debug("Got Close command but write is still pending.")
       context.become(closingWithPendingWrite(info, closeCommander, closedEvent))
     case ConfirmedClosed ⇒ // shutdown output and wait for confirmation
       if (TraceLogging) log.debug("Got ConfirmedClose command, sending FIN.")
-
-      // If peer closed first, the socket is now fully closed.
-      // Also, if shutdownOutput threw an exception we expect this to be an indication
-      // that the peer closed first or concurrently with this code running.
-      // also see http://bugs.sun.com/view_bug.do?bug_id=4516760
-      if (peerClosed || !safeShutdownOutput())
-        doCloseConnection(info.handler, closeCommander, closedEvent)
+      if (isAssociationClosed || !safeShutdown()) doCloseConnection(info.handler, closeCommander, closedEvent)
       else context.become(closing(info, closeCommander))
     case _ ⇒ // close now
       if (TraceLogging) log.debug("Got Close command, closing connection.")
@@ -250,21 +217,20 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   }
 
   def doCloseConnection(handler: ActorRef, closeCommander: Option[ActorRef], closedEvent: ConnectionClosed): Unit = {
-    if (closedEvent == Aborted) abort()
-    else channel.close()
+    if (closedEvent == Aborted) abort() else channel.close()
     stopWith(CloseInformation(Set(handler) ++ closeCommander, closedEvent))
   }
 
-  def handleError(handler: ActorRef, exception: IOException): Unit = {
+  def handleError(handler: ActorRef, exception: Throwable): Unit = {
     log.debug("Closing connection due to IO error {}", exception)
     stopWith(CloseInformation(Set(handler), ErrorClosed(extractMsg(exception))))
   }
-  def safeShutdownOutput(): Boolean =
+  def safeShutdown(): Boolean =
     try {
       channel.shutdown()
       true
     } catch {
-      case _: SocketException ⇒ false
+      case _: IOException ⇒ false
     }
 
   @tailrec private[this] def extractMsg(t: Throwable): String =
@@ -279,7 +245,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   def abort(): Unit = {
     try {
       channel.setOption(SctpStandardSocketOptions.SO_LINGER, Int.box(0))
-      isOutputShutdown = true
+      isLocalShutdown = true
     } // causes the following close() to send SCTP RST
     catch {
       case NonFatal(e) ⇒
@@ -296,44 +262,49 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   }
 
   override def postStop(): Unit = {
-    if (channel.isOpen)
-      abort()
-
+    if (channel.isOpen) abort()
     if (closedMessage != null) {
       val interestedInClose =
-        if (isPendingSend) closedMessage.notificationsTo ++ (pendingSend.map(_._2).toSet)
+        if (isPendingSend) closedMessage.notificationsTo ++ (pendingSendQueue.map(_._2).toSet)
         else closedMessage.notificationsTo
-
       interestedInClose.foreach(_ ! closedMessage.closedEvent)
     }
+    pendingSendQueue = Queue.empty
+    readByteStringMap.clear()
   }
 
   override def postRestart(reason: Throwable): Unit =
     throw new IllegalStateException("Restarting not supported for connection actors.")
 
-  final class AssociationHandler extends AbstractNotificationHandler[LoggingAdapter] {
-    override def handleNotification(not: AssociationChangeNotification, log: LoggingAdapter): HandlerResult = {
-      if (not.event().equals(AssociationChangeNotification.AssocChangeEvent.COMM_UP)) {
-        if (TraceLogging) log.debug("New association setup {}", not.association())
-      }
-      association = Some(not.association())
+  private[this] final class NotificationHandler(handler: Option[ActorRef]) extends AbstractNotificationHandler[LoggingAdapter] {
+    override def handleNotification(not: com.sun.nio.sctp.AssociationChangeNotification, log: LoggingAdapter): HandlerResult = {
+      if (TraceLogging) log.debug(s"Association event ${not.event} ${not.association}")
+      handler.map(_ ! AssociationNotification(not.event))
       HandlerResult.CONTINUE
     }
 
-    override def handleNotification(not: ShutdownNotification, log: LoggingAdapter): HandlerResult = {
-      if (TraceLogging) log.debug("The association has been shutdown {}", not.association())
-      association = None
+    override def handleNotification(not: com.sun.nio.sctp.PeerAddressChangeNotification, log: LoggingAdapter): HandlerResult = {
+      if (TraceLogging) log.debug(s"Peer address event ${not.event} ${not.address}")
+      handler.map(_ ! PeerAddressNotification(not.event))
+      HandlerResult.CONTINUE
+    }
+
+    override def handleNotification(not: com.sun.nio.sctp.SendFailedNotification, log: LoggingAdapter): HandlerResult = {
+      if (TraceLogging) log.debug(s"Send failed $not")
+      handler.map(_ ! SendFailedNotification(ByteString(not.buffer), not.streamNumber, not.errorCode, not.address.asInstanceOf[InetSocketAddress]))
+      HandlerResult.CONTINUE
+    }
+
+    override def handleNotification(not: com.sun.nio.sctp.Notification, log: LoggingAdapter): HandlerResult = {
+      if (TraceLogging) log.debug(s"Custom event ${not}")
+      HandlerResult.CONTINUE
+    }
+
+    override def handleNotification(not: com.sun.nio.sctp.ShutdownNotification, log: LoggingAdapter): HandlerResult = {
+      if (TraceLogging) log.debug(s"The association has been shutdown ${not.association}")
+      isAssociationClosed = true
+      handler.map(_ ! AssociationNotification.SHUTDOWN)
       HandlerResult.RETURN
-    }
-
-    override def handleNotification(not: PeerAddressChangeNotification, log: LoggingAdapter): HandlerResult = {
-      if (TraceLogging) log.debug("The peer address has changed {}", not)
-      HandlerResult.CONTINUE
-    }
-
-    override def handleNotification(not: SendFailedNotification, log: LoggingAdapter): HandlerResult = {
-      if (TraceLogging) log.debug("Send failed {}", not)
-      HandlerResult.CONTINUE
     }
   }
 
@@ -345,7 +316,9 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 private[io] object SctpConnection {
   sealed trait ReadResult
   object EndOfStream extends ReadResult
-  object AllRead extends ReadResult
+  object NothingToRead extends ReadResult
+  sealed trait WriteResult
+  object NothingToWrite extends WriteResult
 
   /**
    * Used to transport information to the postStop method to notify
@@ -356,9 +329,7 @@ private[io] object SctpConnection {
   /**
    * Groups required connection-related data that are only available once the connection has been fully established.
    */
-  final case class ConnectionInfo(registration: ChannelRegistration,
-    handler: ActorRef,
-    keepOpenOnPeerClosed: Boolean)
+  final case class ConnectionInfo(registration: ChannelRegistration, handler: ActorRef, notificationHandler: com.sun.nio.sctp.NotificationHandler[LoggingAdapter])
 
   val doNothing: () ⇒ Unit = () ⇒ ()
 }

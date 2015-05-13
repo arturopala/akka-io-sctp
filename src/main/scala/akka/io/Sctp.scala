@@ -15,7 +15,7 @@ import akka.util.Helpers.Requiring
 import akka.actor._
 import java.lang.{ Iterable ⇒ JIterable }
 import akka.actor._
-import com.sun.nio.sctp.{ SctpChannel, SctpStandardSocketOptions, Association, MessageInfo }
+import com.sun.nio.sctp.{ SctpChannel, SctpStandardSocketOptions, Association, MessageInfo, AssociationChangeNotification, PeerAddressChangeNotification }
 
 object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
 
@@ -160,23 +160,25 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     override def toString: String = if (payload.length <= 256) super.toString else s"SctpMessage($info,${payload.take(256)} ...)"
   }
   object SctpMessage {
-    def apply(payload: ByteString, streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive), payload)
+    def apply(payload: ByteString, streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0, unordered: Boolean = false): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive, unordered), payload)
   }
 
-  final case class SctpMessageInfo(streamNumber: Int, bytes: Int, payloadProtocolID: Int, timeToLive: Long, association: SctpAssociation, address: InetSocketAddress) {
+  final case class SctpMessageInfo(streamNumber: Int, payloadProtocolID: Int, timeToLive: Long, unordered: Boolean, bytes: Int, association: SctpAssociation, address: InetSocketAddress) {
     def asMessageInfo: MessageInfo = {
       val mi = MessageInfo.createOutgoing(null, streamNumber)
       mi.payloadProtocolID(payloadProtocolID)
       mi.timeToLive(timeToLive)
+      mi.unordered(unordered)
       mi
     }
   }
   object SctpMessageInfo {
-    def apply(messageInfo: MessageInfo, length: Int): SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), length, messageInfo.payloadProtocolID(), messageInfo.timeToLive(), SctpAssociation(messageInfo.association()), messageInfo.address().asInstanceOf[InetSocketAddress])
-    def apply(streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0): SctpMessageInfo = {
+    def apply(messageInfo: MessageInfo, length: Int): SctpMessageInfo = new SctpMessageInfo(messageInfo.streamNumber(), messageInfo.payloadProtocolID(), messageInfo.timeToLive(), messageInfo.isUnordered(), length, SctpAssociation(messageInfo.association()), messageInfo.address().asInstanceOf[InetSocketAddress])
+    def apply(streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0, unordered: Boolean = false): SctpMessageInfo = {
       val mi = MessageInfo.createOutgoing(null, streamNumber)
       mi.payloadProtocolID(payloadProtocolID)
       mi.timeToLive(timeToLive)
+      mi.unordered(unordered)
       SctpMessageInfo(mi, -1)
     }
   }
@@ -254,12 +256,8 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    *
    * @param handler The actor which will receive all incoming data and which
    *                will be informed when the connection is closed.
-   *
-   * @param keepOpenOnPeerClosed If this is set to true then the connection
-   *                is not automatically closed when the peer closes its half,
-   *                requiring an explicit [[Closed]] from our side when finished.
    */
-  final case class Register(handler: ActorRef, keepOpenOnPeerClosed: Boolean = false) extends Command
+  final case class Register(handler: ActorRef, notificationHandlerOpt: Option[ActorRef] = None) extends Command
 
   /**
    * In order to close down a listening socket, send this message to that socket’s
@@ -379,16 +377,6 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
   final case class CommandFailed(cmd: Command) extends Event
 
   /**
-   * When `useResumeWriting` is in effect as indicated in the [[Register]] message,
-   * the [[ResumeWriting]] command will be acknowledged by this message type, upon
-   * which it is safe to send at least one write. This means that all writes preceding
-   * the first [[CommandFailed]] message have been enqueued to the O/S kernel at this
-   * point.
-   */
-  sealed trait WritingResumed extends Event
-  case object WritingResumed extends WritingResumed
-
-  /**
    * The sender of a [[Bind]] command will—in case of success—receive confirmation
    * in this form. If the bind address indicated a 0 port number, then the contained
    * `localAddress` can be used to find out which port was automatically assigned.
@@ -463,6 +451,59 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     override def getErrorCause = cause
   }
 
+  // NOTIFICATIONS
+
+  sealed trait Notification extends Message
+  sealed trait AssociationNotification extends Notification
+  sealed trait PeerAddressNotification extends Notification
+
+  object AssociationNotification {
+    /** The association failed to setup. */
+    case object CANT_START extends AssociationNotification
+    /** The association has failed.*/
+    case object COMM_LOST extends AssociationNotification
+    /** A new association is now ready and data may be exchanged with this peer. */
+    case object COMM_UP extends AssociationNotification
+    /** SCTP has detected that the peer has restarted. */
+    case object RESTART extends AssociationNotification
+    /** The association has gracefully closed. */
+    case object SHUTDOWN extends AssociationNotification
+
+    def apply(event: AssociationChangeNotification.AssocChangeEvent): AssociationNotification = event match {
+      case AssociationChangeNotification.AssocChangeEvent.CANT_START => CANT_START
+      case AssociationChangeNotification.AssocChangeEvent.COMM_LOST => COMM_LOST
+      case AssociationChangeNotification.AssocChangeEvent.COMM_UP => COMM_UP
+      case AssociationChangeNotification.AssocChangeEvent.RESTART => RESTART
+      case AssociationChangeNotification.AssocChangeEvent.SHUTDOWN => SHUTDOWN
+    }
+  }
+
+  object PeerAddressNotification {
+    /** The address is now part of the association. */
+    case object ADDR_ADDED extends PeerAddressNotification
+    /** This address is now reachable. */
+    case object ADDR_AVAILABLE extends PeerAddressNotification
+    /** This address has now been confirmed as a valid address. */
+    case object ADDR_CONFIRMED extends PeerAddressNotification
+    /** This address has now been made to be the primary destination address. */
+    case object ADDR_MADE_PRIMARY extends PeerAddressNotification
+    /** The address is no longer part of the association. */
+    case object ADDR_REMOVED extends PeerAddressNotification
+    /** The address specified can no longer be reached. */
+    case object ADDR_UNREACHABLE extends PeerAddressNotification
+
+    def apply(event: PeerAddressChangeNotification.AddressChangeEvent): PeerAddressNotification = event match {
+      case PeerAddressChangeNotification.AddressChangeEvent.ADDR_ADDED => ADDR_ADDED
+      case PeerAddressChangeNotification.AddressChangeEvent.ADDR_AVAILABLE => ADDR_AVAILABLE
+      case PeerAddressChangeNotification.AddressChangeEvent.ADDR_CONFIRMED => ADDR_CONFIRMED
+      case PeerAddressChangeNotification.AddressChangeEvent.ADDR_MADE_PRIMARY => ADDR_MADE_PRIMARY
+      case PeerAddressChangeNotification.AddressChangeEvent.ADDR_REMOVED => ADDR_REMOVED
+      case PeerAddressChangeNotification.AddressChangeEvent.ADDR_UNREACHABLE => ADDR_UNREACHABLE
+    }
+  }
+
+  case class SendFailedNotification(payload: ByteString, streamNumber: Int, errorCode: Int, address: InetSocketAddress) extends Notification
+
 }
 
 class SctpExt(system: ExtendedActorSystem) extends IO.Extension {
@@ -495,6 +536,9 @@ class SctpExt(system: ExtendedActorSystem) extends IO.Extension {
       case "auto" ⇒ Helpers.isWindows
       case _ ⇒ getBoolean("windows-connection-abort-workaround-enabled")
     }
+
+    val AllowChainingReads = getBoolean("allow-chaining-reads")
+    val AllowChainingWrites = getBoolean("allow-chaining-writes")
 
     private[this] def getIntBytes(path: String): Int = {
       val size = getBytes(path)
