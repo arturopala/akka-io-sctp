@@ -89,11 +89,17 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
         case NonFatal(e) ⇒ log.debug("Error closing sctp channel: {}", e)
       }
 
-    case BindAddress(address) =>
-      sctpServerChannel.bindAddress(address)
+    case cmd @ BindAddress(address) =>
+      try sctpServerChannel.bindAddress(address)
+      catch {
+        case NonFatal(e) => sender() ! CommandFailed(cmd)
+      }
 
-    case UnbindAddress(address) =>
-      sctpServerChannel.unbindAddress(address)
+    case cmd @ UnbindAddress(address) =>
+      try sctpServerChannel.unbindAddress(address)
+      catch {
+        case NonFatal(e) => sender() ! CommandFailed(cmd)
+      }
 
     case Unbind ⇒
       log.debug("Unbinding endpoint {}", localAddresses)

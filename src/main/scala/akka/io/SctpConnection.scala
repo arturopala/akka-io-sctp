@@ -75,8 +75,16 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
     handleWriteMessages(info) orElse {
       case ChannelReadable ⇒ doRead(info, None)
       case cmd: CloseCommand ⇒ handleClose(info, Some(sender()), cmd.event)
-      case BindAddress(address) => channel.bindAddress(address)
-      case UnbindAddress(address) => channel.unbindAddress(address)
+      case cmd @ BindAddress(address) =>
+        try channel.bindAddress(address)
+        catch {
+          case NonFatal(e) => sender() ! CommandFailed(cmd)
+        }
+      case cmd @ UnbindAddress(address) =>
+        try channel.unbindAddress(address)
+        catch {
+          case NonFatal(e) => sender() ! CommandFailed(cmd)
+        }
     }
 
   /** connection is closing but a write has to be finished first */

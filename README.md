@@ -46,7 +46,7 @@ The design of SCTP includes appropriate congestion avoidance behavior and resist
 Add to ```build.sbt``` file:
 
     resolvers += Resolver.jcenterRepo
-    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.5")
+    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.6")
 
 ## Usage
 
@@ -54,22 +54,23 @@ SCTP driver messages follows an existing Akka I/O TCP/UDP convention:
 
 ##### sctp server commands and *events* flow:
 -   **`Bind`** → *`Bound`*: server socket binding
--   *`Connected`* → **`Register`** : incoming connection acceptance
--   {*`Received`*, **`Send`** [→ *`Ack`*]} : sctp messages exchange
--   [`Shutdown` → *`ConfirmedClosed`* | `Close` → *`Closed`* | `Abort` → *`Aborted`*] : incoming connection closing
--   *`PeerClosed`* : incoming connection closed by peer side
--   *`ErrorClosed`* : incoming connection closed because of error
+-   *`Connected`* → **`Register`** : inbound connection acceptance
+-   {*`Received`*, **`Send`** [→ *`Ack`*]} : ordinary sctp messages exchange
+-   [`Shutdown` → *`ConfirmedClosed`* | `Close` → *`Closed`* | `Abort` → *`Aborted`*] : inbound connection closing
+-   *`PeerClosed`* : inbound connection closed by peer side
+-   *`ErrorClosed`* : inbound connection closed because of error
 -   **`Unbind`** → *`Unbound`* : server socket unbinding
--   *`CommadFailed`* : command cannot be processed
--   `BindAddress`, `UnbindAddress` : association local and peer addresses change
+-   *`CommadFailed`* : command cannot be completed
+-   `BindAddress`, `UnbindAddress` : association local addresses change
 
 ##### sctp client commands and *events* flow:
 -   **`Connect`** → *`Connected`* → **`Register`** : outgoing connection setup
--   {**`Send`** [→ *`Ack`*], *`Received`*} : sctp messages exchange
+-   {**`Send`** [→ *`Ack`*], *`Received`*} : ordinary sctp messages exchange
 -   [`Shutdown` → *`ConfirmedClosed`* | `Close` → *`Closed`* | `Abort` → *`Aborted`*] : outgoing connection closing
 -   *`PeerClosed`* : outgoing connection closed by peer side
 -   *`ErrorClosed`* : outgoing connection closed because of error
--   *`CommadFailed`* : command cannot be processed
+-   *`CommadFailed`* : command cannot be completed
+-   `BindAddress`, `UnbindAddress` : association local addresses change
 
 #### Messages
 
@@ -137,6 +138,16 @@ Sends data to the SCTP connection. If no ack is needed use the special `NoAck` o
 Unfortunately there is no way to determine whether a particular write has been sent by the O/S.
 ```scala
 case class Send(message: SctpMessage, ack: Event = NoAck)
+```
+##### BindAddress
+Adds the given address to the bound addresses for the channel's socket. The given address must not be the wildcard address. Addresses subquently bound using this method are simply addresses as the SCTP port number remains the same for the lifetime of the channel. Adding addresses to a connected association is optional functionality. If the endpoint supports dynamic address reconfiguration then it may send the appropriate message to the peer to change the peers address lists.
+```scala
+case class BindAddress(address: InetAddress)
+```
+##### UnbindAddress
+Removes the given address from the bound addresses for the channel's socket.The given address must not be the wildcard address. The initial address that the channel's socket is bound to using bind may be removed from the bound addresses for the channel's socket. Removing addresses from a connected association is optional functionality. If the endpoint supports dynamic address reconfiguration then it may send the appropriate message to the peer to change the peers address lists.
+```scala
+case class UnbindAddress(address: InetAddress)
 ```
 ##### Shutdown
 Sends a shutdown command to the remote peer, effectively preventing any new data from being written to the socket by either peer. The channel remains open to allow the for any data (and notifications) to be received that may have been sent by the peer before it received the shutdown command. The sender of this command and the registered handler for incoming data will both be notified once the socket is closed using a `ConfirmedClosed` message.
@@ -210,3 +221,7 @@ class EchoSctpServerActor extends Actor {
 
 }
 ```
+##### Test server and client apps
+Package `me.arturopala.sctp.example` contains 2 example apps:
+-   `EchoSctpServer` - starts echo sctp server on port 8008
+-   `TestSctpClint` - connects 100 sctp clients to the 8008 port and starts sending random messages
