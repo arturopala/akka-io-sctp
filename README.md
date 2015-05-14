@@ -40,7 +40,7 @@ The design of SCTP includes appropriate congestion avoidance behavior and resist
 Add to ```build.sbt``` file:
 
     resolvers += Resolver.jcenterRepo
-    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.2")
+    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.4")
 
 ## Usage
 
@@ -78,7 +78,8 @@ class EchoSctpServerActor extends Actor {
       println(s"received $bytes bytes from $address on stream #$streamNumber with protocolID=$payloadProtocolID and TTL=$timeToLive and assoc=${association.id}")
       val msg = SctpMessage(payload, streamNumber, payloadProtocolID, timeToLive, unordered)
       sender ! Send(msg, Ack(msg))
-    case Ack(msg) => println(s"response sent ${msg.info}")
+    case Ack(msg) =>
+      println(s"message sent back")
     case n: Notification => println(n)
     case msg => println(msg)
   }
