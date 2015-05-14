@@ -4,6 +4,8 @@
 
 [Akka I/O](http://doc.akka.io/docs/akka/snapshot/scala/io.html) driver for [SCTP](http://en.wikipedia.org/wiki/Stream_Control_Transmission_Protocol) protocol based on [Oracle JDK 7/8 SCTP support](http://www.oracle.com/technetwork/articles/javase/index-139946.html).
 
+This driver has been derived from an original [Akka I/O TCP](https://github.com/akka/akka/tree/master/akka-actor/src/main/scala/akka/io) driver.
+
 ## About SCTP - Stream Control Transmission Protocol
 
 The Stream Control Transmission Protocol (SCTP) is a IP transport protocol, existing at an equivalent level with UDP (User Datagram Protocol) and TCP (Transmission Control Protocol), which provide transport layer functions to  Internet applications.
@@ -130,7 +132,7 @@ case class SctpMessageInfo(streamNumber: Int, payloadProtocolID: Int, timeToLive
 case class SctpAssociation(id: Int, maxInboundStreams: Int, maxOutboundStreams: Int)
 ```
 ##### Send
-Sends data to the SCTP connection. If no ack is needed use the special `NoAck` object. The connection actor will reply with a [[CommandFailed]] message if the write could not be enqueued. The connection actor will reply with the supplied `ack` token once the write has been successfully enqueued to the O/S kernel.
+Sends data to the SCTP connection. If no ack is needed use the special `NoAck` object. The connection actor will reply with a `CommandFailed` message if the write could not be enqueued. The connection actor will reply with the supplied `ack` token once the write has been successfully enqueued to the O/S kernel.
 **Note that this does not in any way guarantee that the data will be or have been sent!** 
 Unfortunately there is no way to determine whether a particular write has been sent by the O/S.
 ```scala
