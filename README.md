@@ -40,7 +40,7 @@ The design of SCTP includes appropriate congestion avoidance behavior and resist
 Add to ```build.sbt``` file:
 
     resolvers += Resolver.jcenterRepo
-    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.4")
+    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.5")
 
 ## Usage
 
