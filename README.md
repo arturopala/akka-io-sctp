@@ -138,6 +138,21 @@ Unfortunately there is no way to determine whether a particular write has been s
 ```scala
 case class Send(message: SctpMessage, ack: Event = NoAck)
 ```
+##### Shutdown
+Sends a shutdown command to the remote peer, effectively preventing any new data from being written to the socket by either peer. The channel remains open to allow the for any data (and notifications) to be received that may have been sent by the peer before it received the shutdown command. The sender of this command and the registered handler for incoming data will both be notified once the socket is closed using a `ConfirmedClosed` message.
+```scala
+case object Shutdown
+```
+##### Close
+A normal close operation will first flush pending writes and then close the socket. The sender of this command and the registered handler for incoming data will both be notified once the socket is closed using a `Closed` message.
+```scala
+case object Close
+```
+##### Abort
+An abort operation will not flush pending writes and will issue a SCTP ABORT command to the peer. The sender of this command and the registered handler for incoming data will both be notified once the socket is closed using a `Aborted` message.
+```scala
+case object Abort
+```
 
 ### Examples 
 
