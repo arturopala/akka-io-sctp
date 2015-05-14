@@ -48,7 +48,25 @@ Add to ```build.sbt``` file:
 
 ## Usage
 
-SCTP driver message flow follows an existing TCP/UDP convention (Bind->Bound, Connected->Register, Received, Send)
+SCTP driver messages follows an existing Akka I/O TCP/UDP convention:
+
+#### sctp server commands and *events* flow:
+-   **Bind** -> *Bound*: server socket binding
+-   -> *Connected* -> **Register** : incoming connection acceptance
+-   {-> *Received*, **Send** [-> *Ack*]} : sctp messages exchange
+-   [Shutdown -> *ConfirmedClosed* | Close -> *Closed* | Abort -> *Aborted*] : incoming connection closing
+-   -> *PeerClosed* : incoming connection closed by peer side
+-   -> *ErrorClosed* : incoming connection closed because of error
+-   **Unbind** -> *Unbound* : server socket unbinding
+-   -> *CommadFailed* : command cannot be processed
+
+#### sctp client commands and *events* flow:
+-   **Connect** -> *Connected* -> **Register** : outgoing connection setup
+-   {**Send** [-> *Ack*], -> *Received*} : sctp messages exchange
+-   [Shutdown -> *ConfirmedClosed* | Close -> *Closed* | Abort -> *Aborted*] : outgoing connection closing
+-   -> *PeerClosed* : outgoing connection closed by peer side
+-   -> *ErrorClosed* : outgoing connection closed because of error
+-   -> *CommadFailed* : command cannot be processed
 
 #### Example echo server:
 
