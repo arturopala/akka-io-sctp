@@ -72,7 +72,7 @@ SCTP driver messages follows an existing Akka I/O TCP/UDP convention:
 #### Messages
 
 ##### Bind
-The Bind command message is send to the SCTP manager actor in order to bind to a listening socket. The manager replies either with a *CommandFailed* or the actor handling the listen socket replies with a *Bound* event message. If the local port is set to 0 in the Bind message, then the *Bound* message should be inspected to find
+The `Bind` command message is send to the SCTP manager actor in order to bind to a listening socket. The manager replies either with a `CommandFailed` or the actor handling the listen socket replies with a `Bound` event message. If the local port is set to 0 in the `Bind` message, then the `Bound` message should be inspected to find
 the actual port which was bound to.
 ```scala
 case class Bind(
@@ -84,7 +84,16 @@ case class Bind(
       backlog: Int = 100, //number of unaccepted connections the O/S kernel will hold for this port before refusing connections
       options: immutable.Traversable[SctpSocketOption] = Nil) //sctp connection options
 ```
-Example: ```IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 1024, 1024)```
+Example: 
+```scala 
+IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 1024, 1024)
+```
+##### Bound
+The sender of a `Bind` command will—in case of success—receive confirmation in this form. If the bind address indicated a 0 port number, then the contained `port` holds which port was automatically assigned.
+
+```scala
+case class Bound(localAddresses: Set[InetSocketAddress], port: Int)
+```
 
 ### Examples 
 
