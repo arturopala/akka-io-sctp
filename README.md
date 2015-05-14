@@ -51,20 +51,20 @@ Add to ```build.sbt``` file:
 SCTP driver messages follows an existing Akka I/O TCP/UDP convention:
 
 ##### sctp server commands and *events* flow:
--   **`Bind`** -> *`Bound`*: server socket binding
--   *`Connected`* -> **`Register`** : incoming connection acceptance
--   {*`Received`*, **`Send`** [-> *`Ack`*]} : sctp messages exchange
--   [`Shutdown` -> *`ConfirmedClosed`* | `Close` -> *`Closed`* | `Abort` -> *`Aborted`*] : incoming connection closing
+-   **`Bind`** → *`Bound`*: server socket binding
+-   *`Connected`* → **`Register`** : incoming connection acceptance
+-   {*`Received`*, **`Send`** [→ *`Ack`*]} : sctp messages exchange
+-   [`Shutdown` → *`ConfirmedClosed`* | `Close` → *`Closed`* | `Abort` → *`Aborted`*] : incoming connection closing
 -   *`PeerClosed`* : incoming connection closed by peer side
 -   *`ErrorClosed`* : incoming connection closed because of error
--   **`Unbind`** -> *`Unbound`* : server socket unbinding
+-   **`Unbind`** → *`Unbound`* : server socket unbinding
 -   *`CommadFailed`* : command cannot be processed
 -   `BindAddress`, `UnbindAddress` : association local and peer addresses change
 
 ##### sctp client commands and *events* flow:
--   **`Connect`** -> *`Connected`* -> **`Register`** : outgoing connection setup
--   {**`Send`** [-> *`Ack`*], *`Received`*} : sctp messages exchange
--   [`Shutdown` -> *`ConfirmedClosed`* | `Close` -> *`Closed`* | `Abort` -> *`Aborted`*] : outgoing connection closing
+-   **`Connect`** → *`Connected`* → **`Register`** : outgoing connection setup
+-   {**`Send`** [→ *`Ack`*], *`Received`*} : sctp messages exchange
+-   [`Shutdown` → *`ConfirmedClosed`* | `Close` → *`Closed`* | `Abort` → *`Aborted`*] : outgoing connection closing
 -   *`PeerClosed`* : outgoing connection closed by peer side
 -   *`ErrorClosed`* : outgoing connection closed because of error
 -   *`CommadFailed`* : command cannot be processed
