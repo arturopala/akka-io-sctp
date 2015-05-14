@@ -84,8 +84,11 @@ case class Bind(
       backlog: Int = 100, //number of unaccepted connections the O/S kernel will hold for this port before refusing connections
       options: immutable.Traversable[SctpSocketOption] = Nil) //sctp connection options
 ```
+Example: ```IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 1024, 1024)```
 
-#### Example echo server:
+### Examples 
+
+##### Echo server:
 
 ```scala
 import akka.actor._
