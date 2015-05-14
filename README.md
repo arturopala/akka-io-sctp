@@ -142,16 +142,30 @@ case class Send(message: SctpMessage, ack: Event = NoAck)
 Sends a shutdown command to the remote peer, effectively preventing any new data from being written to the socket by either peer. The channel remains open to allow the for any data (and notifications) to be received that may have been sent by the peer before it received the shutdown command. The sender of this command and the registered handler for incoming data will both be notified once the socket is closed using a `ConfirmedClosed` message.
 ```scala
 case object Shutdown
+case object ConfirmedClosed extends ConnectionClosed
 ```
 ##### Close
 A normal close operation will first flush pending writes and then close the socket. The sender of this command and the registered handler for incoming data will both be notified once the socket is closed using a `Closed` message.
 ```scala
 case object Close
+case object Closed extends ConnectionClosed
 ```
 ##### Abort
 An abort operation will not flush pending writes and will issue a SCTP ABORT command to the peer. The sender of this command and the registered handler for incoming data will both be notified once the socket is closed using a `Aborted` message.
 ```scala
 case object Abort
+case object Aborted extends ConnectionClosed
+```
+##### Unbind
+In order to close down a listening socket, send this message to that socket’s actor (that is the actor which previously had sent the `Bound` message). The listener socket actor will reply with a `Unbound` message.
+```scala
+case object Unbind
+case object Unbound
+```
+##### CommandFailed
+Whenever a command cannot be completed, the queried actor will reply with this message, wrapping the original command which failed.
+```scala
+case class CommandFailed(cmd: Command)
 ```
 
 ### Examples 
