@@ -17,6 +17,8 @@ import com.sun.nio.sctp._
 import org.scalacheck._
 import java.util.concurrent.atomic.AtomicInteger
 import akka.util.ByteString
+import java.io.PrintStream
+import scala.annotation.tailrec
 
 @RunWith(classOf[JUnitRunner])
 class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with ActorSystemTestKit {
@@ -60,6 +62,19 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       msg.cmd should be(nextCommand)
       stop(actor2)
       theend
+    }
+    "close server socket" in new SctpServerWithSingleConnectedClientTest {
+      sctpIncomingConnectionActor ! Close
+      actor.expectMsg(Closed)
+    }
+    "shutdown server socket" in new SctpServerWithSingleConnectedClientTest {
+      sctpIncomingConnectionActor ! Shutdown
+      client.channel.close()
+      actor.expectMsg(ConfirmedClosed)
+    }
+    "abort server socket" in new SctpServerWithSingleConnectedClientTest {
+      sctpIncomingConnectionActor ! Abort
+      actor.expectMsg(Aborted)
     }
     "receive incoming connection, register handler actor and receive messages" in new SctpServerWithSingleConnectedClientTest {
       val map = scala.collection.mutable.Map[Int, Array[Byte]]()
@@ -288,7 +303,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
     }
   }
 
-  def sendMessage(client: Client, bytes: Array[Byte], streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0) = {
+  def sendMessage(client: Client, bytes: Array[Byte], streamNumber: Int = 0, payloadProtocolID: Int = 0, timeToLive: Long = 0) = {
     val messageInfo = MessageInfo.createOutgoing(null, streamNumber)
     messageInfo.payloadProtocolID(payloadProtocolID)
     messageInfo.timeToLive(timeToLive)
@@ -312,9 +327,13 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
   }
 
   def receiveMessage(client: Client): (Array[Byte], MessageInfo) = {
-    def receive(prev: ByteString = ByteString.empty): (ByteString, MessageInfo) = {
+    @tailrec def receive(prev: ByteString = ByteString.empty): (ByteString, MessageInfo) = {
       val buf = ByteBuffer.allocateDirect(1024)
-      val messageInfo = client.channel.receive(buf, null, null)
+      val messageInfo = client.channel.receive(buf, System.out, new AbstractNotificationHandler[PrintStream]() {
+        override def handleNotification(not: com.sun.nio.sctp.ShutdownNotification, out: PrintStream): HandlerResult = {
+          HandlerResult.RETURN
+        }
+      })
       buf.flip()
       val byteString = prev ++ ByteString(buf)
       if (messageInfo == null || messageInfo.isComplete) (byteString, messageInfo)

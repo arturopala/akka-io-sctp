@@ -160,7 +160,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     override def toString: String = if (payload.length <= 256) super.toString else s"SctpMessage($info,${payload.take(256)} ...)"
   }
   object SctpMessage {
-    def apply(payload: ByteString, streamNumber: Int, payloadProtocolID: Int = 0, timeToLive: Long = 0, unordered: Boolean = false): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive, unordered), payload)
+    def apply(payload: ByteString, streamNumber: Int = 0, payloadProtocolID: Int = 0, timeToLive: Long = 0, unordered: Boolean = false): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive, unordered), payload)
   }
 
   final case class SctpMessageInfo(streamNumber: Int, payloadProtocolID: Int, timeToLive: Long, unordered: Boolean, bytes: Int, association: SctpAssociation, address: InetSocketAddress) {
@@ -250,6 +250,25 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
   }
 
   /**
+   * Adds the given address to the bound addresses for the channel's socket.
+   * The given address must not be the wildcard address. The channel must be first bound using bind before invoking this method, otherwise NotYetBoundException is thrown.
+   * Addresses subquently bound using this method are simply addresses as the SCTP port number remains the same for the lifetime of the channel.
+   * Adding addresses to a connected association is optional functionality.
+   * If the endpoint supports dynamic address reconfiguration then it may send the appropriate message to the peer to change the peers address lists.
+   */
+  final case class BindAddress(address: InetAddress) extends Command
+
+  /**
+   * Removes the given address from the bound addresses for the channel's socket.
+   * The given address must not be the wildcard address. The channel must be first bound using bind before invoking this method, otherwise NotYetBoundException is thrown.
+   * If this method is invoked on a channel that does not have address as one of its bound addresses or that has only one local address bound to it, then this method throws IllegalUnbindException.
+   * The initial address that the channel's socket is bound to using bind may be removed from the bound addresses for the channel's socket.
+   * Removing addresses from a connected association is optional functionality.
+   * If the endpoint supports dynamic address reconfiguration then it may send the appropriate message to the peer to change the peers address lists.
+   */
+  final case class UnbindAddress(address: InetAddress) extends Command
+
+  /**
    * This message must be sent to a SCTP connection actor after receiving the
    * [[Connected]] message. The connection will not read any data from the
    * socket until this message is received, because this message defines the
@@ -293,12 +312,12 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
   }
 
   /**
-   * A confirmed close operation will flush pending writes and half-close the
-   * connection, waiting for the peer to close the other half. The sender of this
-   * command and the registered handler for incoming data will both be notified
+   * Sends a shutdown command to the remote peer, effectively preventing any new data from being written to the socket by either peer.
+   * The channel remains open to allow the for any data (and notifications) to be received that may have been sent by the peer before it received the shutdown command.
+   * The sender of this command and the registered handler for incoming data will both be notified
    * once the socket is closed using a [[ConfirmedClosed]] message.
    */
-  case object ConfirmedClose extends CloseCommand {
+  case object Shutdown extends CloseCommand {
     /**
      * The corresponding event which is sent as an acknowledgment once the
      * close operation is finished.
@@ -345,7 +364,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
    * or have been sent!</b> Unfortunately there is no way to determine whether
    * a particular write has been sent by the O/S.
    */
-  final case class Send(message: SctpMessage, ack: Event) extends Command {
+  final case class Send(message: SctpMessage, ack: Event = NoAck) extends Command {
     require(ack != null, "ack must be non-null. Use NoAck if you don't want acks.")
 
     def wantsAck: Boolean = !ack.isInstanceOf[NoAck]
