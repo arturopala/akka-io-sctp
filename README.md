@@ -76,11 +76,11 @@ The `Bind` command message is send to the SCTP manager actor in order to bind to
 the actual port which was bound to.
 ```scala
 case class Bind(
-      handler: ActorRef, //handler actor will receive Bound and Connected events
-      localAddress: InetSocketAddress, //local address and port where to bind server socket
+      handler: ActorRef, //handler actor which will receive Bound and Connected events
+      localAddress: InetSocketAddress, //local socket port
       maxInboundStreams: Int = 0, //max number of incoming streams (later negotiated with client)
       maxOutboundStreams: Int = 0, //max number of outgoing streams (later negotiated with client)
-      additionalAddresses: Set[InetAddress] = Set.empty, //additional home addresses (port stays the same)
+      additionalAddresses: Set[InetAddress] = Set.empty, //additional local home addresses (port stays the same)
       backlog: Int = 100, //number of unaccepted connections the O/S kernel will hold for this port before refusing connections
       options: immutable.Traversable[SctpSocketOption] = Nil) //sctp connection options
 ```
@@ -90,9 +90,51 @@ IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 1024, 1024)
 ```
 ##### Bound
 The sender of a `Bind` command will—in case of success—receive confirmation in this form. If the bind address indicated a 0 port number, then the contained `port` holds which port was automatically assigned.
-
 ```scala
 case class Bound(localAddresses: Set[InetSocketAddress], port: Int)
+```
+##### Connected
+The connection actor sends this event message either to the sender of a `Connect` command (for outbound) or to the handler for incoming connections designated in `Bind` message.
+```scala
+case class Connected(
+    remoteAddresses: Set[InetSocketAddress], //remote peer addresses
+    localAddresses: Set[InetSocketAddress], //local (this side) addresses, same as in Bound event
+    association: SctpAssociation) //sctp association
+```
+##### Register
+This message must be sent to a SCTP connection actor after receiving the `Connected` message. The connection will not read any data from the socket until this message is received, because this message defines the actor which will receive all inbound data.
+```scala
+case class Register(
+    handler: ActorRef, //actor which will receive all further messages
+    notificationHandlerOpt: Option[ActorRef] = None) //optional actor which will receive association notifications
+```
+##### Connect
+The Connect message is sent to the SCTP manager actor. Either the manager replies with a `CommandFailed` or the actor handling the new connection replies with a `Connected` message.
+```scala
+case class Connect(
+      remoteAddress: InetSocketAddress, //remote socket address
+      maxOutboundStreams: Int = 0, //max number of outgoing streams (negotiated with server)
+      maxInboundStreams: Int = 0, //max number of incoming streams (negotiated with server)
+      localAddress: Option[InetSocketAddress] = None, //optional local socket port
+      additionalAddresses: Set[InetAddress] = Set.empty, //additional local home addresses (port stays the same)
+      options: immutable.Traversable[SctpSocketOption] = Nil, //sctp connection options
+      timeout: Option[FiniteDuration] = None) //connection timeout
+```
+##### Received
+Whenever SCTP message is read from a socket it will be transferred within this class to the handler actor which was designated in the `Register` message.
+```scala
+case class Received(message: SctpMessage)
+
+case class SctpMessage(info: SctpMessageInfo, payload: ByteString)
+case class SctpMessageInfo(streamNumber: Int, payloadProtocolID: Int, timeToLive: Long, unordered: Boolean, bytes: Int, association: SctpAssociation, address: InetSocketAddress)
+case class SctpAssociation(id: Int, maxInboundStreams: Int, maxOutboundStreams: Int)
+```
+##### Send
+Sends data to the SCTP connection. If no ack is needed use the special `NoAck` object. The connection actor will reply with a [[CommandFailed]] message if the write could not be enqueued. The connection actor will reply with the supplied `ack` token once the write has been successfully enqueued to the O/S kernel.
+**Note that this does not in any way guarantee that the data will be or have been sent!** 
+Unfortunately there is no way to determine whether a particular write has been sent by the O/S.
+```scala
+case class Send(message: SctpMessage, ack: Event = NoAck)
 ```
 
 ### Examples 
