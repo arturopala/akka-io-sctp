@@ -36,6 +36,7 @@ private[io] final class SctpOutgoingConnection(_stcp: SctpExt,
 
   options.foreach(_.beforeBind(channel))
   localAddress.foreach(channel.bind)
+  additionalAddresses.foreach(channel.bindAddress)
   channelRegistry.register(channel, 0)
   timeout foreach context.setReceiveTimeout //Initiate connection timeout if supplied
 

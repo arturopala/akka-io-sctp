@@ -29,7 +29,8 @@ class EchoSctpServerActor extends Actor {
       println(s"received $bytes bytes from $address on stream #$streamNumber with protocolID=$payloadProtocolID and TTL=$timeToLive and assoc=${association.id}")
       val msg = SctpMessage(payload, streamNumber, payloadProtocolID, timeToLive, unordered)
       sender ! Send(msg, Ack(msg))
-    case Ack(msg) => println(s"response sent ${msg.info}")
+    case Ack(msg) =>
+      println(s"message sent back")
     case n: Notification => println(n)
     case msg => println(msg)
   }

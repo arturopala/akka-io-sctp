@@ -52,9 +52,7 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
     try {
       bind.options.foreach(_.beforeBind(sctpServerChannel))
       sctpServerChannel.bind(bind.localAddress, bind.backlog)
-      bind.additionalAddresses foreach {
-        sctpServerChannel.bindAddress(_)
-      }
+      bind.additionalAddresses.foreach(sctpServerChannel.bindAddress)
       val ret = sctpServerChannel.getAllLocalAddresses() map {
         case isa: InetSocketAddress ⇒ isa
         case x ⇒ throw new IllegalArgumentException(s"bound to unknown SocketAddress [$x]")

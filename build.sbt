@@ -1,7 +1,7 @@
 
 name := "akka-io-sctp"
 
-version := "0.3"
+version := "0.4"
 
 organization := "me.arturopala"
 

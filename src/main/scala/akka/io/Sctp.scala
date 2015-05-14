@@ -207,6 +207,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
       maxOutboundStreams: Int = 0,
       maxInboundStreams: Int = 0,
       localAddress: Option[InetSocketAddress] = None,
+      additionalAddresses: Set[InetAddress] = Set.empty,
       options: immutable.Traversable[SctpSocketOption] = Nil,
       timeout: Option[FiniteDuration] = None) extends Command {
     require(maxInboundStreams >= 0, "maxInboundStreams must be greater or equal to 0")
