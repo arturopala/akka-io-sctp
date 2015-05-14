@@ -35,6 +35,7 @@ The design of SCTP includes appropriate congestion avoidance behavior and resist
 ## Prerequisites
 
 -   Oracle JDK >= 7
+-   [lksctp-tools](http://lksctp.sourceforge.net/) for Linux
 -   Scala 2.11.x
 -   Akka 2.4-SNAPSHOT
 
