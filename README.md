@@ -224,4 +224,4 @@ class EchoSctpServerActor extends Actor {
 ##### Test server and client apps
 Package `me.arturopala.sctp.example` contains 2 example apps:
 -   `EchoSctpServer` - starts echo sctp server on port 8008
--   `TestSctpClint` - connects 100 sctp clients to the 8008 port and starts sending random messages
+-   `TestSctpClient` - connects 100 sctp clients to the 8008 port and starts sending random messages
