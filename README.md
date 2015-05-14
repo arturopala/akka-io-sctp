@@ -59,6 +59,7 @@ SCTP driver messages follows an existing Akka I/O TCP/UDP convention:
 -   *ErrorClosed* : incoming connection closed because of error
 -   **Unbind** -> *Unbound* : server socket unbinding
 -   *CommadFailed* : command cannot be processed
+-   BindAddress, UnbindAddress : association local and peer addresses change
 
 ##### sctp client commands and *events* flow:
 -   **Connect** -> *Connected* -> **Register** : outgoing connection setup
@@ -67,6 +68,22 @@ SCTP driver messages follows an existing Akka I/O TCP/UDP convention:
 -   *PeerClosed* : outgoing connection closed by peer side
 -   *ErrorClosed* : outgoing connection closed because of error
 -   *CommadFailed* : command cannot be processed
+
+#### Messages
+
+##### Bind
+The Bind command message is send to the SCTP manager actor in order to bind to a listening socket. The manager replies either with a *CommandFailed* or the actor handling the listen socket replies with a *Bound* event message. If the local port is set to 0 in the Bind message, then the *Bound* message should be inspected to find
+the actual port which was bound to.
+```scala
+case class Bind(
+      handler: ActorRef, //handler actor will receive Bound and Connected events
+      localAddress: InetSocketAddress, //local address and port where to bind server socket
+      maxInboundStreams: Int = 0, //max number of incoming streams (later negotiated with client)
+      maxOutboundStreams: Int = 0, //max number of outgoing streams (later negotiated with client)
+      additionalAddresses: Set[InetAddress] = Set.empty, //additional home addresses (port stays the same)
+      backlog: Int = 100, //number of unaccepted connections the O/S kernel will hold for this port before refusing connections
+      options: immutable.Traversable[SctpSocketOption] = Nil) //sctp connection options
+```
 
 #### Example echo server:
 
