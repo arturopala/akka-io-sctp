@@ -156,7 +156,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
             case None => ByteString(buffer)
           }
           if (messageInfo.isComplete()) {
-            info.handler ! Received(SctpMessage(SctpMessageInfo(messageInfo, byteString.length), byteString))
+            info.handler ! Received(SctpMessage(SctpMessageInfo(messageInfo, byteString.length), byteString.compact))
             readByteStringMap(streamNumber) = None
             if (TraceLogging) log.debug(s"Read message from stream #$streamNumber, ${byteString.length} bytes")
             if (hasPeerSentShutdown) EndOfStream else if (AllowChainingReads) innerRead(buffer) else NothingToRead
