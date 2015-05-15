@@ -58,7 +58,7 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
         case x ⇒ throw new IllegalArgumentException(s"bound to unknown SocketAddress [$x]")
       }
       channelRegistry.register(sctpServerChannel, SelectionKey.OP_ACCEPT)
-      log.debug("Successfully bound to {}", ret)
+      if (TraceLogging) log.debug("Successfully bound to {}", ret)
       bind.options.foreach(_.afterConnect(sctpServerChannel))
       ret.toSet
     } catch {
@@ -86,7 +86,7 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
       log.warning("Could not register incoming connection since selector capacity limit is reached, closing connection")
       try sctpChannel.close()
       catch {
-        case NonFatal(e) ⇒ log.debug("Error closing sctp channel: {}", e)
+        case NonFatal(e) ⇒ if (TraceLogging) log.debug("Error closing sctp channel: {}", e)
       }
 
     case cmd @ BindAddress(address) =>
@@ -102,10 +102,10 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
       }
 
     case Unbind ⇒
-      log.debug("Unbinding endpoint {}", localAddresses)
+      if (TraceLogging) log.debug("Unbinding endpoint {}", localAddresses)
       sctpServerChannel.close()
       sender() ! Unbound
-      log.debug("Unbound endpoint {}, stopping listener", localAddresses)
+      if (TraceLogging) log.debug("Unbound endpoint {}, stopping listener", localAddresses)
       context.stop(self)
   }
 
@@ -118,7 +118,7 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
         }
       } else null
     if (sctpChannel != null) {
-      log.debug("New connection accepted")
+      if (TraceLogging) log.debug("New connection accepted")
       sctpChannel.configureBlocking(false)
       def props(registry: ChannelRegistry) =
         Props(classOf[SctpIncomingConnection], sctp, sctpChannel, registry, bind.handler, bind.options)
@@ -130,11 +130,11 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
   override def postStop() {
     try {
       if (sctpServerChannel.isOpen) {
-        log.debug("Closing serverSctpChannel after being stopped")
+        if (TraceLogging) log.debug("Closing serverSctpChannel after being stopped")
         sctpServerChannel.close()
       }
     } catch {
-      case NonFatal(e) ⇒ log.debug("Error closing SctpServerChannel: {}", e)
+      case NonFatal(e) ⇒ if (TraceLogging) log.debug("Error closing SctpServerChannel: {}", e)
     }
   }
 }

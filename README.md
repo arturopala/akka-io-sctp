@@ -229,7 +229,7 @@ Package `me.arturopala.sctp.example` contains 2 example apps:
 -   `TestSctpClient` - connects 100 sctp clients to the 8008 port and starts sending random messages
 
 ### Diagnostics and tuning
--   Use `cat /proc/net/sctp/snmp` to access statistics related to SCTP states,packets and chunks.
+-   Use `cat /proc/net/sctp/snmp` to access statistics related to SCTP states, packets and chunks.
 -   Use `cat /proc/net/sctp/assocs` to display active associations.
 -   Use `cat /proc/net/sctp/eps` to display active endpoints.
 
