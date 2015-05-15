@@ -6,6 +6,8 @@
 
 This driver has been derived from an original [Akka I/O TCP](https://github.com/akka/akka/tree/master/akka-actor/src/main/scala/akka/io) driver.
 
+This implementation uses **one-to-one style interface**. The goal of this style is to follow as closely as possible the current practice of using the sockets interface for a connection oriented protocol, such as TCP.  This style enables existing applications using connection oriented protocols to be ported to SCTP with very little effort. See more [here](http://tools.ietf.org/html/draft-ietf-tsvwg-sctpsocket-15#section-4).
+
 ## About SCTP - Stream Control Transmission Protocol
 
 The Stream Control Transmission Protocol (SCTP) is a IP transport protocol, existing at an equivalent level with UDP (User Datagram Protocol) and TCP (Transmission Control Protocol), which provide transport layer functions to  Internet applications.
@@ -225,3 +227,10 @@ class EchoSctpServerActor extends Actor {
 Package `me.arturopala.sctp.example` contains 2 example apps:
 -   `EchoSctpServer` - starts echo sctp server on port 8008
 -   `TestSctpClient` - connects 100 sctp clients to the 8008 port and starts sending random messages
+
+### Diagnostics and tuning
+Use `cat /proc/net/sctp/snmp` to access statistics related to SCTP states,packets and chunks.
+Use `cat /proc/net/sctp/assocs` to display active associations.
+Use `cat /proc/net/sctp/eps` to display active endpoints.
+
+See `sctp` [man page](http://linux.die.net/man/7/sctp)
