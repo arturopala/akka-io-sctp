@@ -157,7 +157,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
   }
 
   final case class SctpMessage(info: SctpMessageInfo, payload: ByteString) {
-    override def toString: String = if (payload.length <= 256) super.toString else s"SctpMessage($info,${payload.take(256)} ...)"
+    override def toString: String = if (payload.length <= 256) super.toString else s"SctpMessage($info,${payload.take(64)} ...)"
   }
   object SctpMessage {
     def apply(payload: ByteString, streamNumber: Int = 0, payloadProtocolID: Int = 0, timeToLive: Long = 0, unordered: Boolean = false): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive, unordered), payload)

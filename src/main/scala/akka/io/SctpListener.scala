@@ -106,7 +106,7 @@ private[io] final class SctpListener(selectorRouter: ActorRef,
       sctpServerChannel.close()
       sender() ! Unbound
       if (TraceLogging) log.debug("Unbound endpoint {}, stopping listener", localAddresses)
-      context.stop(self)
+      self ! PoisonPill
   }
 
   @tailrec final def acceptAllPending(registration: ChannelRegistration, limit: Int): Int = {

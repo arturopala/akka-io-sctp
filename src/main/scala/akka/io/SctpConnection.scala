@@ -211,23 +211,25 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   }
 
   def handleClose(info: ConnectionInfo, closeCommander: Option[ActorRef],
-    closedEvent: ConnectionClosed): Unit = closedEvent match {
-    case Aborted ⇒
-      if (TraceLogging) log.debug("Got Abort command. closing association.")
-      doCloseConnection(info.handler, closeCommander, closedEvent)
-    case _ if isPendingSend ⇒ // finish writing first
-      if (TraceLogging) log.debug("Got Close command but some sends are still pending.")
-      context.become(closingWithPendingWrite(info, closeCommander, closedEvent))
-    case ConfirmedClosed ⇒ // shutdown output and wait for confirmation
-      if (TraceLogging) log.debug("Got Shutdown command, the channel remains open to allow the for any data (and notifications) to be received.")
-      if (hasPeerSentShutdown || !doSafeShutdown()) {
+    closedEvent: ConnectionClosed): Unit = {
+    closedEvent match {
+      case Aborted ⇒
+        if (TraceLogging) log.debug("Got Abort command. closing association.")
         doCloseConnection(info.handler, closeCommander, closedEvent)
-      } else {
-        context.become(closing(info, closeCommander))
-      }
-    case _ ⇒ // close now
-      if (TraceLogging) log.debug("Got Close command, closing connection.")
-      doCloseConnection(info.handler, closeCommander, closedEvent)
+      case _ if isPendingSend ⇒ // finish writing first
+        if (TraceLogging) log.debug("Got Close command but some sends are still pending.")
+        context.become(closingWithPendingWrite(info, closeCommander, closedEvent))
+      case ConfirmedClosed ⇒ // shutdown output and wait for confirmation
+        if (TraceLogging) log.debug("Got Shutdown command, the channel remains open to allow the for any data (and notifications) to be received.")
+        if (hasPeerSentShutdown || !doSafeShutdown()) {
+          doCloseConnection(info.handler, closeCommander, closedEvent)
+        } else {
+          context.become(closing(info, closeCommander))
+        }
+      case _ ⇒ // close now
+        if (TraceLogging) log.debug("Got Close command, closing connection.")
+        doCloseConnection(info.handler, closeCommander, closedEvent)
+    }
   }
 
   def doCloseConnection(handler: ActorRef, closeCommander: Option[ActorRef], closedEvent: ConnectionClosed): Unit = {
@@ -260,7 +262,6 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   def abort(): Unit = {
     try {
       channel.setOption(SctpStandardSocketOptions.SO_LINGER, Int.box(0))
-      isAborted = true
     } // causes the following close() to send SCTP RST
     catch {
       case NonFatal(e) ⇒
@@ -268,12 +269,17 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
         // (also affected: OS/X Java 1.6.0_37)
         if (TraceLogging) log.debug("setOption(SO_LINGER, 0) failed with [{}]", e)
     }
-    channel.close()
+    try {
+      channel.close()
+      isAborted = true
+    } catch {
+      case NonFatal(e) => if (TraceLogging) log.debug("channel.close() failed with [{}]", e)
+    }
   }
 
   def stopWith(closeInfo: CloseInformation): Unit = {
     closedMessage = closeInfo
-    context.stop(self)
+    self ! PoisonPill
   }
 
   override def postStop(): Unit = {

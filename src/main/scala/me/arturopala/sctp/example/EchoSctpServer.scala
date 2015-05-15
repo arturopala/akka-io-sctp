@@ -6,19 +6,20 @@ import java.net.InetSocketAddress
 
 object EchoSctpServer {
   def main(args: Array[String]): Unit = {
-    val initialActor = classOf[EchoSctpServerActor].getName
-    akka.Main.main(Array(initialActor))
+    val port = if (args.length > 0) args(0).toInt else 8080
+    val system = ActorSystem("echo-sctp-server")
+    system.actorOf(Props(classOf[EchoSctpServerActor], port))
   }
 }
 
-class EchoSctpServerActor extends Actor {
+class EchoSctpServerActor(port: Int) extends Actor {
 
   import Sctp._
 
   case class Ack(message: SctpMessage) extends Event
 
   implicit val system = context.system
-  IO(Sctp) ! Bind(self, new InetSocketAddress(8008), 1024, 1024)
+  IO(Sctp) ! Bind(self, new InetSocketAddress(port), 1024, 1024)
 
   def receive = {
     case Bound(localAddresses, port) => println(s"SCTP server bound to $localAddresses")

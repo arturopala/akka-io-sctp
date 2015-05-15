@@ -5,30 +5,23 @@ import akka.io._
 import akka.util._
 import java.net.InetSocketAddress
 import scala.util.Random
+import scala.concurrent.duration._
 
 object TestSctpClient {
   def main(args: Array[String]): Unit = {
-    val initialActor = classOf[TestSctpClientActor].getName
-    akka.Main.main(Array(initialActor))
-
+    val port = if (args.length > 0) args(0).toInt else 8080
+    val noOfWorkers = if (args.length > 1) args(1).toInt else 100
+    val system = ActorSystem("test-sctp-client")
+    (1 to noOfWorkers) foreach { i =>
+      system.actorOf(Props(classOf[TestSctpClientWorker], port, i))
+    }
   }
 }
 
-class TestSctpClientActor extends Actor {
-
-  (1 to 100) foreach { i =>
-    context.actorOf(Props(classOf[TestSctpClientWorker], i))
-  }
-
-  def receive: Receive = {
-    case _ =>
-  }
-
-}
-
-class TestSctpClientWorker(id: Int) extends Actor {
+class TestSctpClientWorker(port: Int, id: Int) extends Actor {
 
   import Sctp._
+  import system.dispatcher
 
   var lastMessage: SctpMessage = _
 
@@ -37,7 +30,9 @@ class TestSctpClientWorker(id: Int) extends Actor {
   println(s"worker #$id: trying connect ...")
 
   implicit val system = context.system
-  IO(Sctp) ! Connect(new InetSocketAddress("127.0.0.1", 8008), 1024, 1024)
+
+  val sctpio = IO(Sctp)
+  sctpio ! Connect(new InetSocketAddress("127.0.0.1", port), 1024, 1024)
 
   def receive: Receive = {
     case Connected(remoteAddresses, localAddresses, association) =>
@@ -52,6 +47,9 @@ class TestSctpClientWorker(id: Int) extends Actor {
     case Ack(msg) =>
       lastMessage = msg
       println(s"worker #$id: message sent with ${msg.payload.size} bytes on stream #${msg.info.streamNumber}")
+
+    case CommandFailed(cmd: Connect) => system.scheduler.scheduleOnce(5.seconds, sctpio, cmd)
+
     case n: Notification => println(n)
     case msg => println(msg)
   }
@@ -72,7 +70,7 @@ class TestSctpClientWorker(id: Int) extends Actor {
     (Seq(payloadMatcher, streamNumberMatcher).foldLeft[MatchResult](Right((received, sent))) { (r, i) => i(r) }) match {
       case Left(error) =>
         println("worker #$id: " + error)
-        context.stop(self)
+        self ! PoisonPill
       case r: Right[_, _] =>
     }
   }

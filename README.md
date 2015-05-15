@@ -224,9 +224,10 @@ class EchoSctpServerActor extends Actor {
 }
 ```
 ##### Test server and client apps
-Package `me.arturopala.sctp.example` contains 2 example apps:
--   `EchoSctpServer` - starts echo sctp server on port 8008
--   `TestSctpClient` - connects 100 sctp clients to the 8008 port and starts sending random messages
+Package `me.arturopala.sctp.example` contains 2 example test apps:
+
+-   `$ sbt "run-main me.arturopala.sctp.example.EchoSctpServer 8008"` - starts echo sctp server on port 8008
+-   `$ sbt "run-main me.arturopala.sctp.example.TestSctpClient 8008 100"` - connects 100 sctp clients to the 8008 port and starts sending random messages
 
 ### Diagnostics and tuning
 -   Use `cat /proc/net/sctp/snmp` to access statistics related to SCTP states, packets and chunks.
