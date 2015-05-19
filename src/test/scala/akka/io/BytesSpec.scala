@@ -11,7 +11,7 @@ import scala.annotation.tailrec
 class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
 
   val byteArrayGenerator = Gen.nonEmptyContainerOf[Array, Byte](Arbitrary.arbitrary[Byte])
-  implicit override val generatorDrivenConfig = PropertyCheckConfig(minSize = 0, maxSize = 1024, minSuccessful = 100, workers = 2)
+  implicit override val generatorDrivenConfig = PropertyCheckConfig(minSize = 0, maxSize = 1024, minSuccessful = 50, workers = 5)
 
   "Bytes" should {
 
@@ -65,7 +65,7 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val bytes = Bytes(array)
-          for (i <- 0 until array.length) {
+          for (i <- 0 until array.length / 2) {
             bytes(i) should be(array(i))
           }
           intercept[ArrayIndexOutOfBoundsException] {
@@ -76,6 +76,18 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
           }
           intercept[ArrayIndexOutOfBoundsException] {
             bytes(array.length + 1)
+          }
+          if (bytes.length > 2) {
+            val bytes2 = bytes.slice(0, bytes.length / 2)
+            intercept[ArrayIndexOutOfBoundsException] {
+              bytes2(-1)
+            }
+            intercept[ArrayIndexOutOfBoundsException] {
+              bytes2(bytes2.length)
+            }
+            intercept[ArrayIndexOutOfBoundsException] {
+              bytes2(bytes2.length + 1)
+            }
           }
       }
     }
@@ -116,6 +128,16 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
               for (i <- 0 until len) {
                 sliced(i) should be(bytes(n + i))
               }
+              if (n > 1 && n % 2 == 0) {
+                val len2 = sliced.length / 2
+                for (m <- 0 until len2) {
+                  val sliced2 = sliced.slice(m, m + len2)
+                  sliced2.length should be(len2)
+                  for (j <- 0 until len2) {
+                    sliced2(j) should be(sliced(m + j))
+                  }
+                }
+              }
             }
           }
       }
@@ -125,8 +147,11 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
+          val (a3, a4) = a2.splitAt(scala.util.Random.nextInt(a2.length))
           val bytes1 = Bytes(a1)
-          val bytes2 = Bytes(a2)
+          val bytes3 = Bytes(a3)
+          val bytes4 = Bytes(a4)
+          val bytes2 = bytes3 ++ bytes4
           val bytes = bytes1 ++ bytes2
           bytes.length should be(array.length)
           bytes.toArray should contain theSameElementsInOrderAs array
@@ -140,6 +165,16 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
               sliced.length should be(len)
               for (i <- 0 until len) {
                 sliced(i) should be(bytes(n + i))
+              }
+              if (n > 1 && n % 2 == 0) {
+                val len2 = sliced.length / 2
+                for (m <- 0 until len2) {
+                  val sliced2 = sliced.slice(m, m + len2)
+                  sliced2.length should be(len2)
+                  for (j <- 0 until len2) {
+                    sliced2(j) should be(sliced(m + j))
+                  }
+                }
               }
             }
           }

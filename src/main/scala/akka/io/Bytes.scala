@@ -2,24 +2,28 @@ package akka.io
 
 import java.nio.ByteBuffer
 
+/**
+ * Lazy byte sequence with fast concat, slice and unsigned values read.
+ */
 sealed trait Bytes {
 
-  // abstract members
   def length: Int
+
   def apply(n: Int): Byte
   def get(n: Int): Option[Byte]
+
+  def slice(from: Int, to: Int): Bytes
+  def take(n: Int): Bytes
+  def drop(n: Int): Bytes
+
+  def ++(other: Bytes): Bytes
+
   def toArray: Array[Byte]
   def copyToArray(array: Array[Byte], start: Int): Unit
-  def slice(from: Int, to: Int): Bytes
 
-  // concrete implementations
-  final def take(n: Int): Bytes = slice(0, n)
-  final def drop(n: Int): Bytes = slice(n, length)
-  def ++(other: Bytes): Bytes = Bytes.Pair(this, other)
-
-  final def readUnsignedByte(n: Int): Int = Unsigned.toInt(this(n))
-  final def readUnsignedInt(n: Int): Int = Unsigned.toInt(this(n), this(n + 1))
-  final def readUnsignedLong(n: Int): Long = Unsigned.toLong(this(n), this(n + 1), this(n + 2), this(n + 3))
+  def readUnsignedByte(pos: Int): Int
+  def readUnsignedInt(pos: Int): Int
+  def readUnsignedLong(pos: Int): Long
 
 }
 
@@ -41,14 +45,44 @@ object Bytes {
     }
   }
 
-  def wrap(array: Array[Byte]): Bytes = {
-    if (array.isEmpty) Empty
-    else new ArrayView(array, 0, array.length)
-  }
+  def wrap(array: Array[Byte]): Bytes = if (array.isEmpty) Empty else new Single(array)
 
   def decode(bytes: String*): Bytes = wrap(bytes.map(java.lang.Integer.decode).map(_.toByte).toArray)
 
-  case object Empty extends Bytes {
+  /** common operations impl */
+  trait Ops extends Bytes {
+
+    final def take(n: Int): Bytes = slice(0, n)
+    final def drop(n: Int): Bytes = slice(n, length)
+    final def ++(other: Bytes): Bytes = Bytes.Pair(this, other)
+
+    final def readUnsignedByte(pos: Int): Int = Unsigned.toInt(this(pos))
+    final def readUnsignedInt(pos: Int): Int = Unsigned.toInt(this(pos), this(pos + 1))
+    final def readUnsignedLong(pos: Int): Long = Unsigned.toLong(this(pos), this(pos + 1), this(pos + 2), this(pos + 3))
+
+    override def toString: String = {
+      val sb = new StringBuilder("Bytes(")
+      if (length > 0) {
+        sb ++= this(0).toString
+        if (length > 1) {
+          for (n <- 1 until Math.min(length, 64)) {
+            sb += ','
+            sb ++= this(n).toString
+          }
+          if (length > 64) sb.append("...")
+        }
+      }
+      sb += ')'
+      sb.toString
+    }
+
+    @scala.annotation.tailrec private[this] def compare(other: Bytes, from: Int = 0): Boolean = if (from < other.length) (if (this(from) == other(from)) compare(other, from + 1) else false) else true
+    override def equals(other: Any): Boolean = other.isInstanceOf[Bytes] && other.asInstanceOf[Bytes].length == length && compare(other.asInstanceOf[Bytes])
+
+  }
+
+  /** empty Bytes representation */
+  case object Empty extends Bytes with Ops {
     override val length = 0
     override def apply(n: Int): Byte = throw new ArrayIndexOutOfBoundsException
     override def get(n: Int): Option[Byte] = None
@@ -59,7 +93,25 @@ object Bytes {
     override def toString: String = "Bytes.Empty"
   }
 
-  final class ArrayView private[Bytes] (bytes: Array[Byte], offset: Int, override val length: Int) extends Bytes {
+  /** single array wrapper */
+  final class Single private[Bytes] (bytes: Array[Byte]) extends Bytes with Ops {
+    override val length = bytes.length
+    override def apply(n: Int): Byte = bytes(n)
+    override def get(n: Int): Option[Byte] = if (n >= 0 && n < length) Some(bytes(n)) else None
+    override def slice(from: Int, to: Int): Bytes = View(bytes, from, to - from)
+    override def toArray: Array[Byte] = bytes.clone
+    override def copyToArray(array: Array[Byte], start: Int) = System.arraycopy(bytes, 0, array, start, length)
+  }
+
+  object View {
+    def apply(bytes: Array[Byte], offset: Int, length: Int): Bytes =
+      if (bytes != null && bytes.length > 0 && offset < bytes.length && length > 0)
+        new View(bytes, offset, Math.min(length, bytes.length - offset))
+      else Empty
+  }
+
+  /** sliced array wrapper */
+  final class View private[Bytes] (bytes: Array[Byte], offset: Int, override val length: Int) extends Bytes with Ops {
     require(offset >= 0, s"offset=$offset parameter must be >= 0")
     require(offset + length <= bytes.length, s"offset=$offset parameter must be >= 0")
 
@@ -68,12 +120,12 @@ object Bytes {
     private[this] def view(newOffset: Int, newLength: Int) = {
       val off = Math.max(newOffset, 0)
       if (newLength > 0 && newOffset < limit)
-        new ArrayView(bytes, off, Math.min(newLength, limit - off))
+        new View(bytes, off, Math.min(newLength, limit - off))
       else Empty
     }
 
     override def apply(n: Int): Byte = if (n >= 0 && n < length) bytes(offset + n) else throw new ArrayIndexOutOfBoundsException
-    override def get(n: Int): Option[Byte] = if (n >= 0 && n < length) Some(bytes(n)) else None
+    override def get(n: Int): Option[Byte] = if (n >= 0 && n < length) Some(bytes(offset + n)) else None
     override def slice(from: Int, to: Int): Bytes = view(offset + from, to - from)
 
     override def toArray: Array[Byte] = {
@@ -83,31 +135,14 @@ object Bytes {
     }
     override def copyToArray(array: Array[Byte], start: Int): Unit = System.arraycopy(bytes, offset, array, start, length)
 
-    @scala.annotation.tailrec private[this] def compare(other: Bytes, from: Int = 0): Boolean = if (from < other.length) (if (this(from) == other(from)) compare(other, from + 1) else false) else true
-    override def equals(other: Any): Boolean = other.isInstanceOf[Bytes] && other.asInstanceOf[Bytes].length == length && compare(other.asInstanceOf[Bytes])
-
-    override def toString: String = {
-      val sb = new StringBuilder("Bytes(")
-      if (length > 0) {
-        sb ++= bytes(offset).toString
-        if (length > 1) {
-          for (n <- 1 until Math.min(length, 64)) {
-            sb += ','
-            sb ++= bytes(offset + n).toString
-          }
-          if (length > 64) sb.append("...")
-        }
-      }
-      sb += ')'
-      sb.toString
-    }
   }
 
   object Pair {
     def apply(left: Bytes, right: Bytes): Bytes = if (left == Empty) right else if (right == Empty) Empty else new Pair(left, right)
   }
 
-  final class Pair(left: Bytes, right: Bytes) extends Bytes {
+  /** two Bytes concatenation */
+  final class Pair private[Bytes] (left: Bytes, right: Bytes) extends Bytes with Ops {
 
     override val length: Int = left.length + right.length
     override def apply(n: Int): Byte = if (n < left.length) left(n) else right(n - left.length)
