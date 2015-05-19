@@ -15,23 +15,39 @@ sealed trait Bytes {
   def slice(from: Int, to: Int): Bytes
   def take(n: Int): Bytes
   def drop(n: Int): Bytes
+  def dropRight(n: Int): Bytes
   def splitAt(n: Int): (Bytes, Bytes)
 
-  def ++(other: Bytes): Bytes
+  def head: Byte
+  def tail: Bytes
+  def acquire: (Byte, Bytes)
 
-  def toArray: Array[Byte]
-  def copyToArray(array: Array[Byte], start: Int): Unit
-  def copyToBuffer(buffer: ByteBuffer): Unit
+  def last: Byte
+  def init: Bytes
+
+  def ++(other: Bytes): Bytes
+  def +:(byte: Byte): Bytes
+  def :+(byte: Byte): Bytes
+
+  def foreach[U](f: Byte => U): Unit
 
   def readUnsignedByte(pos: Int): Int
   def readUnsignedInt(pos: Int): Int
   def readUnsignedLong(pos: Int): Long
+
+  def toIterator: Iterator[Byte]
+  def toTraversable: Traversable[Byte]
+  def toArray: Array[Byte]
+
+  def copyToArray(array: Array[Byte], start: Int): Unit
+  def copyToBuffer(buffer: ByteBuffer): Unit
 
 }
 
 object Bytes {
 
   def apply(array: Array[Byte]): Bytes = wrap(array.clone)
+  def apply(byte: Byte): Bytes = new Single(byte)
 
   def apply[T: Numeric](bytes: T*): Bytes = {
     val num = implicitly[Numeric[T]]
@@ -47,21 +63,31 @@ object Bytes {
     }
   }
 
-  def wrap(array: Array[Byte]): Bytes = if (array.isEmpty) Empty else new Single(array)
+  def wrap(array: Array[Byte]): Bytes = if (array.isEmpty) Empty else new Simple(array)
 
   def decode(bytes: String*): Bytes = wrap(bytes.map(java.lang.Integer.decode).map(_.toByte).toArray)
 
   def empty = Empty
 
   /** common operations impl */
-  trait Ops extends Bytes {
+  sealed trait Ops extends Bytes {
     this: Bytes =>
 
     final def take(n: Int): Bytes = slice(0, n)
     final def drop(n: Int): Bytes = slice(n, length)
+    final def dropRight(n: Int): Bytes = slice(0, length - n)
     final def splitAt(n: Int): (Bytes, Bytes) = if (n < 0) (Empty, this) else if (n >= length) (this, Empty) else (slice(0, n), slice(n, length))
 
-    final def ++(other: Bytes): Bytes = Bytes.Pair(this, other)
+    final def head: Byte = this(0)
+    final def tail: Bytes = if (length > 1) slice(1, length) else Empty
+    final def acquire: (Byte, Bytes) = (head, tail)
+
+    final def last: Byte = this(length - 1)
+    final def init: Bytes = if (length > 1) slice(0, length - 1) else Empty
+
+    override def ++(other: Bytes): Bytes = Bytes.Pair(this, other)
+    override def +:(byte: Byte): Bytes = Bytes.Pair(new Bytes.Single(byte), this)
+    override def :+(byte: Byte): Bytes = Bytes.Pair(this, new Bytes.Single(byte))
 
     final def readUnsignedByte(pos: Int): Int = Unsigned.toInt(this(pos))
     final def readUnsignedInt(pos: Int): Int = Unsigned.toInt(this(pos), this(pos + 1))
@@ -94,6 +120,9 @@ object Bytes {
     override def apply(n: Int): Byte = throw new ArrayIndexOutOfBoundsException
     override def get(n: Int): Option[Byte] = None
     override def slice(from: Int, to: Int): Bytes = this
+    override def foreach[U](f: Byte => U): Unit = ()
+    override def toIterator: Iterator[Byte] = Iterator.empty
+    override def toTraversable: Traversable[Byte] = Traversable.empty
     override def toArray: Array[Byte] = Array.empty[Byte]
     override def copyToArray(array: Array[Byte], start: Int) = ()
     override def copyToBuffer(buffer: ByteBuffer): Unit = ()
@@ -101,12 +130,15 @@ object Bytes {
     override def toString: String = "Bytes.Empty"
   }
 
-  /** single array wrapper */
-  final class Single private[Bytes] (bytes: Array[Byte]) extends Bytes with Ops {
+  /** simple array wrapper */
+  final class Simple private[Bytes] (bytes: Array[Byte]) extends Bytes with Ops {
     override val length = bytes.length
     override def apply(n: Int): Byte = bytes(n)
     override def get(n: Int): Option[Byte] = if (n >= 0 && n < length) Some(bytes(n)) else None
     override def slice(from: Int, to: Int): Bytes = View(bytes, from, to - from)
+    override def foreach[U](f: Byte => U): Unit = bytes.foreach(f)
+    override def toIterator: Iterator[Byte] = bytes.iterator
+    override def toTraversable: Traversable[Byte] = bytes.toTraversable
     override def toArray: Array[Byte] = bytes.clone
     override def copyToArray(array: Array[Byte], start: Int) = System.arraycopy(bytes, 0, array, start, length)
     override def copyToBuffer(buffer: ByteBuffer): Unit = buffer.put(bytes)
@@ -126,7 +158,7 @@ object Bytes {
 
     val limit = offset + length
 
-    private[this] def view(newOffset: Int, newLength: Int) = {
+    private[this] def crop(newOffset: Int, newLength: Int) = {
       val off = Math.max(newOffset, 0)
       val len = Math.min(newLength, limit - off)
       if (off == offset && len == length) this else View(bytes, off, len)
@@ -134,7 +166,19 @@ object Bytes {
 
     override def apply(n: Int): Byte = if (n >= 0 && n < length) bytes(offset + n) else throw new ArrayIndexOutOfBoundsException
     override def get(n: Int): Option[Byte] = if (n >= 0 && n < length) Some(bytes(offset + n)) else None
-    override def slice(from: Int, to: Int): Bytes = view(offset + from, to - from)
+    override def slice(from: Int, to: Int): Bytes = crop(offset + from, to - from)
+    override def foreach[U](f: Byte => U): Unit = for (i <- offset until limit) f(bytes(i))
+
+    override def toIterator: Iterator[Byte] = new Iterator[Byte] {
+      val lim = limit
+      var pos = offset
+      override def hasNext = pos < lim
+      override def next: Byte = { val byte = bytes(pos); pos = pos + 1; byte }
+    }
+
+    override def toTraversable: Traversable[Byte] = new Traversable[Byte] {
+      override def foreach[U](f: Byte => U): Unit = View.this.foreach(f)
+    }
 
     override def toArray: Array[Byte] = {
       val array = new Array[Byte](length)
@@ -156,6 +200,7 @@ object Bytes {
     override val length: Int = left.length + right.length
     override def apply(n: Int): Byte = if (n < left.length) left(n) else right(n - left.length)
     override def get(n: Int): Option[Byte] = if (n < left.length) left.get(n) else right.get(n - left.length)
+
     override def slice(from: Int, to: Int): Bytes = {
       require(to >= from, s"to=$to parameter MUST be greater or equal to from=$from parameter")
       if (to <= left.length) left.slice(from, to)
@@ -164,6 +209,25 @@ object Bytes {
         val break = Math.min(to, left.length)
         Pair(left.slice(from, break), right.slice(0, to - break))
       }
+    }
+
+    override def foreach[U](f: Byte => U): Unit = {
+      left.foreach(f)
+      right.foreach(f)
+    }
+
+    override def toIterator: Iterator[Byte] = new Iterator[Byte] {
+      var iterator = left.toIterator
+      var isLeft = true
+      override def hasNext = {
+        val has = iterator.hasNext
+        if (has) has else if (isLeft) { iterator = right.toIterator; isLeft = false; hasNext } else false
+      }
+      override def next: Byte = iterator.next
+    }
+
+    override def toTraversable: Traversable[Byte] = new Traversable[Byte] {
+      override def foreach[U](f: Byte => U): Unit = Pair.this.foreach(f)
     }
 
     override def toArray: Array[Byte] = {
@@ -182,6 +246,22 @@ object Bytes {
       left.copyToBuffer(buffer)
       right.copyToBuffer(buffer)
     }
+  }
+
+  /** single byte wrapper */
+  final class Single private[Bytes] (byte: Byte) extends Bytes with Ops {
+    override val length = 1
+    override def apply(n: Int): Byte = if (n == 0) byte else throw new ArrayIndexOutOfBoundsException
+    override def get(n: Int): Option[Byte] = if (n == 0) Some(byte) else None
+    override def slice(from: Int, to: Int): Bytes = if (from > 0 || to < 1) Empty else this
+    override def foreach[U](f: Byte => U): Unit = f(byte)
+    override def toIterator: Iterator[Byte] = Iterator.single(byte)
+    override def toTraversable: Traversable[Byte] = new Traversable[Byte] {
+      override def foreach[U](f: Byte => U): Unit = f(byte)
+    }
+    override def toArray: Array[Byte] = Array(byte)
+    override def copyToArray(array: Array[Byte], start: Int) = array(start) = byte
+    override def copyToBuffer(buffer: ByteBuffer): Unit = buffer.put(byte)
   }
 
 }

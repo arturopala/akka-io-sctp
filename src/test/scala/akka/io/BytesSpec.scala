@@ -62,6 +62,17 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
       b.toArray should contain theSameElementsInOrderAs (Array(0, -1, 1, 16, 10).map(_.toByte))
     }
 
+    "wrap a single byte" in {
+      forAll {
+        (byte: Byte) =>
+          val bytes = Bytes(byte)
+          bytes.length should be(1)
+          bytes.head should be(byte)
+          bytes.tail should be(Bytes.Empty)
+          bytes(0) should be(byte)
+      }
+    }
+
     "get byte by index or throw ArrayIndexOutOfBoundsException" in {
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
@@ -93,7 +104,7 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
       }
     }
 
-    "get Some byte by index or None" in {
+    "get Some byte by index or return None" in {
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val bytes = Bytes(array)
@@ -144,7 +155,7 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
       }
     }
 
-    "concatenate two Bytes" in {
+    "split and concatenate" in {
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
@@ -152,7 +163,12 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
           val bytes1 = Bytes.empty ++ Bytes(a1)
           val bytes3 = Bytes(a3) ++ Bytes.empty
           val bytes4 = Bytes(a4)
-          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes4
+          val (bytes5, bytes6) = bytes4.splitAt(scala.util.Random.nextInt(bytes4.length))
+          val bytes7 = if (bytes5.length > 1) {
+            val (head, tail) = bytes5.acquire
+            head +: tail
+          } else bytes5
+          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes7 ++ bytes6
           val bytes = bytes1 ++ Bytes.empty ++ bytes2 ++ Bytes.empty
           bytes.length should be(array.length)
           bytes.toArray should contain theSameElementsInOrderAs array
@@ -179,6 +195,94 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
               }
             }
           }
+      }
+    }
+
+    "append single byte" in {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          whenever(array.length > 0) {
+            val bytes = Bytes(array) :+ array(0)
+            bytes.length should be(array.length + 1)
+            for (i <- 0 until array.length) {
+              bytes(i) should be(array(i))
+            }
+            bytes.last should be(array(0))
+          }
+      }
+    }
+
+    "append bytes" in {
+      val bytes = Bytes.empty :+ 0xFF.toByte :+ 0x01.toByte :+ 0xA0.toByte
+      bytes.length should be(3)
+      bytes(0) should be(0xFF.toByte)
+      bytes(1) should be(0x01.toByte)
+      bytes(2) should be(0xA0.toByte)
+    }
+
+    "prepend single byte" in {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          whenever(array.length > 0) {
+            val bytes = array(array.length - 1) +: Bytes(array)
+            bytes.length should be(array.length + 1)
+            for (i <- 0 until array.length) {
+              bytes(i + 1) should be(array(i))
+            }
+            bytes.head should be(array(array.length - 1))
+          }
+      }
+    }
+
+    "iterate over content using foreach" in {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
+          val (a3, a4) = a2.splitAt(scala.util.Random.nextInt(a2.length))
+          val bytes1 = Bytes.empty ++ Bytes(a1)
+          val bytes3 = Bytes(a3) ++ Bytes.empty
+          val bytes4 = Bytes(a4)
+          val (bytes5, bytes6) = bytes4.splitAt(scala.util.Random.nextInt(bytes4.length))
+          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes5 ++ bytes6
+          val bytes = bytes1 ++ Bytes.empty ++ bytes2 ++ Bytes.empty
+          bytes.length should be(array.length)
+          for (b <- bytes) {
+            array should contain(b)
+          }
+      }
+    }
+
+    "iterate over content using toIterator" in {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
+          val (a3, a4) = a2.splitAt(scala.util.Random.nextInt(a2.length))
+          val bytes1 = Bytes.empty ++ Bytes(a1)
+          val bytes3 = Bytes(a3) ++ Bytes.empty
+          val bytes4 = Bytes(a4)
+          val (bytes5, bytes6) = bytes4.splitAt(scala.util.Random.nextInt(bytes4.length))
+          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes5 ++ bytes6
+          val bytes = bytes1 ++ Bytes.empty ++ bytes2 ++ Bytes.empty
+          bytes.length should be(array.length)
+          val iterator = bytes.toIterator
+          iterator.sameElements(array.iterator) should be(true)
+      }
+    }
+
+    "iterate over content using toTraversable" in {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
+          val (a3, a4) = a2.splitAt(scala.util.Random.nextInt(a2.length))
+          val bytes1 = Bytes.empty ++ Bytes(a1)
+          val bytes3 = Bytes(a3) ++ Bytes.empty
+          val bytes4 = Bytes(a4)
+          val (bytes5, bytes6) = bytes4.splitAt(scala.util.Random.nextInt(bytes4.length))
+          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes5 ++ bytes6
+          val bytes = bytes1 ++ Bytes.empty ++ bytes2 ++ Bytes.empty
+          bytes.length should be(array.length)
+          val traversable = bytes.toTraversable
+          traversable.toSeq should contain theSameElementsInOrderAs array
       }
     }
 
