@@ -6,6 +6,7 @@ import org.scalatest.prop.PropertyChecks
 import org.scalatest.junit.JUnitRunner
 import org.scalacheck._
 import scala.annotation.tailrec
+import java.nio.ByteBuffer
 
 @RunWith(classOf[JUnitRunner])
 class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
@@ -148,11 +149,11 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
         (array: Array[Byte]) =>
           val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
           val (a3, a4) = a2.splitAt(scala.util.Random.nextInt(a2.length))
-          val bytes1 = Bytes(a1)
-          val bytes3 = Bytes(a3)
+          val bytes1 = Bytes.empty ++ Bytes(a1)
+          val bytes3 = Bytes(a3) ++ Bytes.empty
           val bytes4 = Bytes(a4)
-          val bytes2 = bytes3 ++ bytes4
-          val bytes = bytes1 ++ bytes2
+          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes4
+          val bytes = bytes1 ++ Bytes.empty ++ bytes2 ++ Bytes.empty
           bytes.length should be(array.length)
           bytes.toArray should contain theSameElementsInOrderAs array
           for (i <- 0 until array.length) {
@@ -177,6 +178,49 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
                 }
               }
             }
+          }
+      }
+    }
+
+    "copy content to an existing array" in {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
+          val (a3, a4) = a2.splitAt(scala.util.Random.nextInt(a2.length))
+          val bytes1 = Bytes.empty ++ Bytes(a1)
+          val bytes3 = Bytes(a3) ++ Bytes.empty
+          val bytes4 = Bytes(a4)
+          val (bytes5, bytes6) = bytes4.splitAt(scala.util.Random.nextInt(bytes4.length))
+          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes5 ++ bytes6
+          val bytes = bytes1 ++ Bytes.empty ++ bytes2 ++ Bytes.empty
+          bytes.length should be(array.length)
+          val destination = new Array[Byte](array.length)
+          bytes.copyToArray(destination, 0)
+          destination should contain theSameElementsInOrderAs array
+          for (i <- 0 until array.length) {
+            destination(i) should be(array(i))
+          }
+      }
+    }
+
+    "copy content to an existing byte buffer" in {
+      forAll(byteArrayGenerator) {
+        (array: Array[Byte]) =>
+          val (a1, a2) = array.splitAt(scala.util.Random.nextInt(array.length))
+          val (a3, a4) = a2.splitAt(scala.util.Random.nextInt(a2.length))
+          val bytes1 = Bytes.empty ++ Bytes(a1)
+          val bytes3 = Bytes(a3) ++ Bytes.empty
+          val bytes4 = Bytes(a4)
+          val (bytes5, bytes6) = bytes4.splitAt(scala.util.Random.nextInt(bytes4.length))
+          val bytes2 = bytes3 ++ Bytes.empty ++ Bytes.empty ++ bytes4
+          val bytes = bytes1 ++ Bytes.empty ++ bytes2 ++ Bytes.empty
+          bytes.length should be(array.length)
+          val buffer = ByteBuffer.allocateDirect(array.length)
+          bytes.copyToBuffer(buffer)
+          buffer.flip()
+          buffer.limit should be(array.length)
+          for (i <- 0 until array.length) {
+            buffer.get should be(array(i))
           }
       }
     }

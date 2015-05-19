@@ -15,11 +15,13 @@ sealed trait Bytes {
   def slice(from: Int, to: Int): Bytes
   def take(n: Int): Bytes
   def drop(n: Int): Bytes
+  def splitAt(n: Int): (Bytes, Bytes)
 
   def ++(other: Bytes): Bytes
 
   def toArray: Array[Byte]
   def copyToArray(array: Array[Byte], start: Int): Unit
+  def copyToBuffer(buffer: ByteBuffer): Unit
 
   def readUnsignedByte(pos: Int): Int
   def readUnsignedInt(pos: Int): Int
@@ -49,11 +51,16 @@ object Bytes {
 
   def decode(bytes: String*): Bytes = wrap(bytes.map(java.lang.Integer.decode).map(_.toByte).toArray)
 
+  def empty = Empty
+
   /** common operations impl */
   trait Ops extends Bytes {
+    this: Bytes =>
 
     final def take(n: Int): Bytes = slice(0, n)
     final def drop(n: Int): Bytes = slice(n, length)
+    final def splitAt(n: Int): (Bytes, Bytes) = if (n < 0) (Empty, this) else if (n >= length) (this, Empty) else (slice(0, n), slice(n, length))
+
     final def ++(other: Bytes): Bytes = Bytes.Pair(this, other)
 
     final def readUnsignedByte(pos: Int): Int = Unsigned.toInt(this(pos))
@@ -89,6 +96,7 @@ object Bytes {
     override def slice(from: Int, to: Int): Bytes = this
     override def toArray: Array[Byte] = Array.empty[Byte]
     override def copyToArray(array: Array[Byte], start: Int) = ()
+    override def copyToBuffer(buffer: ByteBuffer): Unit = ()
     override def equals(other: Any): Boolean = other.isInstanceOf[this.type]
     override def toString: String = "Bytes.Empty"
   }
@@ -101,6 +109,7 @@ object Bytes {
     override def slice(from: Int, to: Int): Bytes = View(bytes, from, to - from)
     override def toArray: Array[Byte] = bytes.clone
     override def copyToArray(array: Array[Byte], start: Int) = System.arraycopy(bytes, 0, array, start, length)
+    override def copyToBuffer(buffer: ByteBuffer): Unit = buffer.put(bytes)
   }
 
   object View {
@@ -119,9 +128,8 @@ object Bytes {
 
     private[this] def view(newOffset: Int, newLength: Int) = {
       val off = Math.max(newOffset, 0)
-      if (newLength > 0 && newOffset < limit)
-        new View(bytes, off, Math.min(newLength, limit - off))
-      else Empty
+      val len = Math.min(newLength, limit - off)
+      if (off == offset && len == length) this else View(bytes, off, len)
     }
 
     override def apply(n: Int): Byte = if (n >= 0 && n < length) bytes(offset + n) else throw new ArrayIndexOutOfBoundsException
@@ -133,12 +141,13 @@ object Bytes {
       bytes.copyToArray(array, offset, length)
       array
     }
+    override def copyToBuffer(buffer: ByteBuffer): Unit = buffer.put(bytes, offset, length)
     override def copyToArray(array: Array[Byte], start: Int): Unit = System.arraycopy(bytes, offset, array, start, length)
 
   }
 
   object Pair {
-    def apply(left: Bytes, right: Bytes): Bytes = if (left == Empty) right else if (right == Empty) Empty else new Pair(left, right)
+    def apply(left: Bytes, right: Bytes): Bytes = if (left == Empty) right else if (right == Empty) left else new Pair(left, right)
   }
 
   /** two Bytes concatenation */
@@ -167,6 +176,11 @@ object Bytes {
     override def copyToArray(array: Array[Byte], start: Int): Unit = {
       left.copyToArray(array, start)
       right.copyToArray(array, start + left.length)
+    }
+
+    override def copyToBuffer(buffer: ByteBuffer): Unit = {
+      left.copyToBuffer(buffer)
+      right.copyToBuffer(buffer)
     }
   }
 
