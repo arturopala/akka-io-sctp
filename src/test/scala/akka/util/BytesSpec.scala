@@ -1,4 +1,4 @@
-package akka.io
+package akka.util
 
 import org.junit.runner.RunWith
 import org.scalatest.{ WordSpecLike, Matchers }

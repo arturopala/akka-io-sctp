@@ -1,9 +1,9 @@
-package akka.io
+package akka.util
 
 import java.nio.ByteBuffer
 
 /**
- * Lazy byte sequence with fast concat, slice and unsigned values read.
+ * Lazy, immutable byte sequence with light & fast: concat, slice, unsigned values reads.
  */
 sealed trait Bytes {
 
@@ -38,9 +38,12 @@ sealed trait Bytes {
   def toIterator: Iterator[Byte]
   def toTraversable: Traversable[Byte]
   def toArray: Array[Byte]
+  def toByteString: ByteString
 
   def copyToArray(array: Array[Byte], start: Int): Unit
   def copyToBuffer(buffer: ByteBuffer): Unit
+
+  def compact: Bytes
 
 }
 
@@ -112,6 +115,8 @@ object Bytes {
     @scala.annotation.tailrec private[this] def compare(other: Bytes, from: Int = 0): Boolean = if (from < other.length) (if (this(from) == other(from)) compare(other, from + 1) else false) else true
     override def equals(other: Any): Boolean = other.isInstanceOf[Bytes] && other.asInstanceOf[Bytes].length == length && compare(other.asInstanceOf[Bytes])
 
+    override def toByteString: ByteString = ByteString.ByteString1C(this.toArray)
+
   }
 
   /** empty Bytes representation */
@@ -124,10 +129,12 @@ object Bytes {
     override def toIterator: Iterator[Byte] = Iterator.empty
     override def toTraversable: Traversable[Byte] = Traversable.empty
     override def toArray: Array[Byte] = Array.empty[Byte]
+    override def toByteString: ByteString = ByteString.empty
     override def copyToArray(array: Array[Byte], start: Int) = ()
     override def copyToBuffer(buffer: ByteBuffer): Unit = ()
     override def equals(other: Any): Boolean = other.isInstanceOf[this.type]
     override def toString: String = "Bytes.Empty"
+    override def compact: Bytes = this
   }
 
   /** simple array wrapper */
@@ -140,8 +147,10 @@ object Bytes {
     override def toIterator: Iterator[Byte] = bytes.iterator
     override def toTraversable: Traversable[Byte] = bytes.toTraversable
     override def toArray: Array[Byte] = bytes.clone
+    override def toByteString: ByteString = ByteString.ByteString1C(bytes)
     override def copyToArray(array: Array[Byte], start: Int) = System.arraycopy(bytes, 0, array, start, length)
     override def copyToBuffer(buffer: ByteBuffer): Unit = buffer.put(bytes)
+    override def compact: Bytes = this
   }
 
   object View {
@@ -187,7 +196,7 @@ object Bytes {
     }
     override def copyToBuffer(buffer: ByteBuffer): Unit = buffer.put(bytes, offset, length)
     override def copyToArray(array: Array[Byte], start: Int): Unit = System.arraycopy(bytes, offset, array, start, length)
-
+    override def compact: Bytes = new Simple(toArray)
   }
 
   object Pair {
@@ -246,6 +255,8 @@ object Bytes {
       left.copyToBuffer(buffer)
       right.copyToBuffer(buffer)
     }
+
+    override def compact: Bytes = new Simple(toArray)
   }
 
   /** single byte wrapper */
@@ -262,6 +273,7 @@ object Bytes {
     override def toArray: Array[Byte] = Array(byte)
     override def copyToArray(array: Array[Byte], start: Int) = array(start) = byte
     override def copyToBuffer(buffer: ByteBuffer): Unit = buffer.put(byte)
+    override def compact: Bytes = this
   }
 
 }
