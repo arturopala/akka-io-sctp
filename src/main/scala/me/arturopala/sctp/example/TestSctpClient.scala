@@ -55,7 +55,7 @@ class TestSctpClientWorker(port: Int, id: Int) extends Actor {
   }
 
   def sendNewMessage() = {
-    val msg = SctpMessage(ByteString(Random.nextString((Random.nextInt(64) + 1) * (Random.nextInt(1024) + 1))), Random.nextInt(10), 0, 0, true)
+    val msg = SctpMessage(Bytes(Random.nextString((Random.nextInt(64) + 1) * (Random.nextInt(1024) + 1))), Random.nextInt(10), 0, 0, true)
     sender ! Send(msg, Ack(msg))
   }
 

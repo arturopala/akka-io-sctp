@@ -45,7 +45,7 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
     "wrap sequence of bytes" in {
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
-          val bytes = Bytes(array: _*)
+          val bytes = Bytes.fromInts(array.map(_.toInt): _*)
           bytes.length should be(array.length)
           bytes.toArray should contain theSameElementsInOrderAs array
       }
@@ -54,11 +54,11 @@ class BytesSpec extends WordSpecLike with Matchers with PropertyChecks {
     "wrap sequence of ints" in {
       forAll {
         (array: Array[Int]) =>
-          val bytes = Bytes(array: _*)
+          val bytes = Bytes.fromInts(array: _*)
           bytes.length should be(array.length)
           bytes.toArray should contain theSameElementsInOrderAs (array.map(_.toByte))
       }
-      val b = Bytes(0x00, 0xFF, 0x01, 0x10, 0x0A)
+      val b = Bytes.fromInts(0x00, 0xFF, 0x01, 0x10, 0x0A)
       b.toArray should contain theSameElementsInOrderAs (Array(0, -1, 1, 16, 10).map(_.toByte))
     }
 

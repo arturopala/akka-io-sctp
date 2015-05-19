@@ -11,7 +11,7 @@ import scala.collection.immutable.{ Queue, Traversable }
 import scala.util.control.NonFatal
 import scala.concurrent.duration._
 import akka.actor._
-import akka.util.{ ByteString, ByteStringBuilder }
+import akka.util.{ Bytes }
 import akka.io.SctpInet.SctpSocketOption
 import akka.io.Sctp._
 import akka.io.SelectionHandler._
@@ -32,7 +32,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
   import SctpConnection._
   import scala.collection.JavaConversions._
 
-  val readByteStringMap: MutableMap[Int, Option[ByteString]] = MutableMap.empty.withDefaultValue(None)
+  val readStream2BytesMap: MutableMap[Int, Option[Bytes]] = MutableMap.empty.withDefaultValue(None)
   def isPendingSend = !pendingSendQueue.isEmpty
 
   private[this] var pendingSendQueue: Queue[(Send, ActorRef)] = Queue.empty
@@ -151,17 +151,17 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
           buffer.flip()
           val streamNumber = messageInfo.streamNumber
           if (TraceLogging) log.debug(s"Read [$bytesRead] bytes from stream #$streamNumber")
-          val byteString: ByteString = readByteStringMap(streamNumber) match {
-            case Some(pbs) => pbs ++ ByteString(buffer)
-            case None => ByteString(buffer)
+          val bytes: Bytes = readStream2BytesMap(streamNumber) match {
+            case Some(pbs) => pbs ++ Bytes(buffer)
+            case None => Bytes(buffer)
           }
           if (messageInfo.isComplete()) {
-            info.handler ! Received(SctpMessage(SctpMessageInfo(messageInfo, byteString.length), byteString.compact))
-            readByteStringMap(streamNumber) = None
-            if (TraceLogging) log.debug(s"Read message from stream #$streamNumber, ${byteString.length} bytes")
+            info.handler ! Received(SctpMessage(SctpMessageInfo(messageInfo, bytes.length), bytes))
+            readStream2BytesMap(streamNumber) = None
+            if (TraceLogging) log.debug(s"Read message from stream #$streamNumber, ${bytes.length} bytes")
             if (hasPeerSentShutdown) EndOfStream else if (AllowChainingReads) innerRead(buffer) else NothingToRead
           } else {
-            readByteStringMap(streamNumber) = Some(byteString)
+            readStream2BytesMap(streamNumber) = Some(bytes)
             innerRead(buffer)
           }
         }
@@ -292,7 +292,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
       interestedInClose.foreach(_ ! closedMessage.closedEvent)
     }
     pendingSendQueue = Queue.empty
-    readByteStringMap.clear()
+    readStream2BytesMap.clear()
   }
 
   override def postRestart(reason: Throwable): Unit =
@@ -313,7 +313,7 @@ private[io] abstract class SctpConnection(val sctp: SctpExt, val channel: SctpCh
 
     override def handleNotification(not: com.sun.nio.sctp.SendFailedNotification, log: LoggingAdapter): HandlerResult = {
       if (TraceLogging) log.debug(s"Send failed $not")
-      handler.map(_ ! SendFailedNotification(ByteString(not.buffer), not.streamNumber, not.errorCode, not.address.asInstanceOf[InetSocketAddress]))
+      handler.map(_ ! SendFailedNotification(Bytes(not.buffer), not.streamNumber, not.errorCode, not.address.asInstanceOf[InetSocketAddress]))
       HandlerResult.CONTINUE
     }
 

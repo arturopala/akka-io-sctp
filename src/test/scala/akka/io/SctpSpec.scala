@@ -16,7 +16,7 @@ import java.nio.{ ByteBuffer }
 import com.sun.nio.sctp._
 import org.scalacheck._
 import java.util.concurrent.atomic.AtomicInteger
-import akka.util.ByteString
+import akka.util.Bytes
 import java.io.PrintStream
 import scala.annotation.tailrec
 
@@ -91,7 +91,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
           message.info.address should not be (null)
           client.localAddresses should contain(message.info.address)
           val bytes = map(message.info.payloadProtocolID)
-          message.payload.toArray[Byte] should contain theSameElementsInOrderAs bytes
+          message.payload.toArray should contain theSameElementsInOrderAs bytes
       }
       theend
     }
@@ -110,7 +110,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
           map(id) = array
-          sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id), Ack)
+          sctpIncomingConnectionActor ! Send(SctpMessage(Bytes(array), id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id), Ack)
       }
       def receiveAndAssert: Unit = {
         val (bytes, messageInfo) = receiveMessage(client)
@@ -132,7 +132,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
           val id = nsn.getAndIncrement
           map(id) = array
           val client = clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS)
-          client.sctpIncomingConnectionActor ! Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id), Ack)
+          client.sctpIncomingConnectionActor ! Send(SctpMessage(Bytes(array), id % SCTP_CLIENT_MAX_NO_OF_INBOUND_STREAMS, id), Ack)
       }
       def receiveAndAssert(id: Int): Unit = {
         val client = clients(id % NO_OF_SIMULTANEOUS_SCTP_CLIENTS)
@@ -172,9 +172,9 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       forAll(byteArrayGenerator) {
         (array: Array[Byte]) =>
           val id = nsn.getAndIncrement
-          sctpOutgoingConnectionActor.tell(Send(SctpMessage(ByteString(array), id % SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, id), Ack), clientProbe.ref)
+          sctpOutgoingConnectionActor.tell(Send(SctpMessage(Bytes(array), id % SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS, id), Ack), clientProbe.ref)
           val received = serverHandler.expectMsgType[Received](timeout)
-          received.message.payload should contain theSameElementsInOrderAs array
+          received.message.payload.toArray should contain theSameElementsInOrderAs array
           received.message.info.streamNumber should be(id % SCTP_CLIENT_MAX_NO_OF_OUTBOUND_STREAMS)
           received.message.info.payloadProtocolID should be(id)
           received.message.info.bytes should be(array.length)
@@ -322,12 +322,12 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
       'bytes(bytes.length),
       'payloadProtocolID(payloadProtocolID)
     )
-    received.message.payload.toArray[Byte] should contain theSameElementsInOrderAs bytes
+    received.message.payload.toArray should contain theSameElementsInOrderAs bytes
     client.localAddresses should contain(received.message.info.address)
   }
 
   def receiveMessage(client: Client): (Array[Byte], MessageInfo) = {
-    @tailrec def receive(prev: ByteString = ByteString.empty): (ByteString, MessageInfo) = {
+    @tailrec def receive(prev: Bytes = Bytes.empty): (Bytes, MessageInfo) = {
       val buf = ByteBuffer.allocateDirect(1024)
       val messageInfo = client.channel.receive(buf, System.out, new AbstractNotificationHandler[PrintStream]() {
         override def handleNotification(not: com.sun.nio.sctp.ShutdownNotification, out: PrintStream): HandlerResult = {
@@ -335,7 +335,7 @@ class SctpSpec extends WordSpecLike with Matchers with PropertyChecks with Actor
         }
       })
       buf.flip()
-      val byteString = prev ++ ByteString(buf)
+      val byteString = prev ++ Bytes(buf)
       if (messageInfo == null || messageInfo.isComplete) (byteString, messageInfo)
       else receive(byteString)
     }

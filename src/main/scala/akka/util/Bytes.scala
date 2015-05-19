@@ -1,6 +1,7 @@
 package akka.util
 
-import java.nio.ByteBuffer
+import java.nio.{ ByteBuffer }
+import java.nio.charset.{ Charset, StandardCharsets }
 
 /**
  * Lazy, immutable byte sequence with light & fast: concat, slice, unsigned values reads.
@@ -44,6 +45,7 @@ sealed trait Bytes {
   def copyToBuffer(buffer: ByteBuffer): Unit
 
   def compact: Bytes
+  def size: Int
 
 }
 
@@ -51,11 +53,8 @@ object Bytes {
 
   def apply(array: Array[Byte]): Bytes = wrap(array.clone)
   def apply(byte: Byte): Bytes = new Single(byte)
-
-  def apply[T: Numeric](bytes: T*): Bytes = {
-    val num = implicitly[Numeric[T]]
-    wrap(bytes.map(num.toInt(_).toByte).toArray)
-  }
+  def apply(bytes: Byte*): Bytes = wrap(bytes.toArray)
+  def fromInts(bytes: Int*): Bytes = wrap(bytes.map(_.toByte).toArray)
 
   def apply(buffer: ByteBuffer): Bytes = {
     if (buffer.remaining < 1) Empty
@@ -66,35 +65,34 @@ object Bytes {
     }
   }
 
+  def apply(string: String, charset: Charset = StandardCharsets.UTF_8): Bytes = wrap(string.getBytes(charset))
   def wrap(array: Array[Byte]): Bytes = if (array.isEmpty) Empty else new Simple(array)
-
   def decode(bytes: String*): Bytes = wrap(bytes.map(java.lang.Integer.decode).map(_.toByte).toArray)
-
   def empty = Empty
 
   /** common operations impl */
   sealed trait Ops extends Bytes {
     this: Bytes =>
 
-    final def take(n: Int): Bytes = slice(0, n)
-    final def drop(n: Int): Bytes = slice(n, length)
-    final def dropRight(n: Int): Bytes = slice(0, length - n)
-    final def splitAt(n: Int): (Bytes, Bytes) = if (n < 0) (Empty, this) else if (n >= length) (this, Empty) else (slice(0, n), slice(n, length))
+    final override def take(n: Int): Bytes = slice(0, n)
+    final override def drop(n: Int): Bytes = slice(n, length)
+    final override def dropRight(n: Int): Bytes = slice(0, length - n)
+    final override def splitAt(n: Int): (Bytes, Bytes) = if (n < 0) (Empty, this) else if (n >= length) (this, Empty) else (slice(0, n), slice(n, length))
 
-    final def head: Byte = this(0)
-    final def tail: Bytes = if (length > 1) slice(1, length) else Empty
-    final def acquire: (Byte, Bytes) = (head, tail)
+    final override def head: Byte = this(0)
+    final override def tail: Bytes = if (length > 1) slice(1, length) else Empty
+    final override def acquire: (Byte, Bytes) = (head, tail)
 
-    final def last: Byte = this(length - 1)
-    final def init: Bytes = if (length > 1) slice(0, length - 1) else Empty
+    final override def last: Byte = this(length - 1)
+    final override def init: Bytes = if (length > 1) slice(0, length - 1) else Empty
 
     override def ++(other: Bytes): Bytes = Bytes.Pair(this, other)
     override def +:(byte: Byte): Bytes = Bytes.Pair(new Bytes.Single(byte), this)
     override def :+(byte: Byte): Bytes = Bytes.Pair(this, new Bytes.Single(byte))
 
-    final def readUnsignedByte(pos: Int): Int = Unsigned.toInt(this(pos))
-    final def readUnsignedInt(pos: Int): Int = Unsigned.toInt(this(pos), this(pos + 1))
-    final def readUnsignedLong(pos: Int): Long = Unsigned.toLong(this(pos), this(pos + 1), this(pos + 2), this(pos + 3))
+    final override def readUnsignedByte(pos: Int): Int = Unsigned.toInt(this(pos))
+    final override def readUnsignedInt(pos: Int): Int = Unsigned.toInt(this(pos), this(pos + 1))
+    final override def readUnsignedLong(pos: Int): Long = Unsigned.toLong(this(pos), this(pos + 1), this(pos + 2), this(pos + 3))
 
     override def toString: String = {
       val sb = new StringBuilder("Bytes(")
@@ -116,7 +114,7 @@ object Bytes {
     override def equals(other: Any): Boolean = other.isInstanceOf[Bytes] && other.asInstanceOf[Bytes].length == length && compare(other.asInstanceOf[Bytes])
 
     override def toByteString: ByteString = ByteString.ByteString1C(this.toArray)
-
+    final override def size: Int = length
   }
 
   /** empty Bytes representation */

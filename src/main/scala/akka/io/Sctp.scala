@@ -10,7 +10,7 @@ import com.typesafe.config.Config
 import scala.concurrent.duration._
 import scala.collection.immutable
 import scala.collection.JavaConverters._
-import akka.util.{ Helpers, ByteString }
+import akka.util.{ Helpers, Bytes }
 import akka.util.Helpers.Requiring
 import akka.actor._
 import java.lang.{ Iterable ⇒ JIterable }
@@ -156,11 +156,11 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     ) getOrElse null
   }
 
-  final case class SctpMessage(info: SctpMessageInfo, payload: ByteString) {
+  final case class SctpMessage(info: SctpMessageInfo, payload: Bytes) {
     override def toString: String = if (payload.length <= 256) super.toString else s"SctpMessage($info,${payload.take(64)} ...)"
   }
   object SctpMessage {
-    def apply(payload: ByteString, streamNumber: Int = 0, payloadProtocolID: Int = 0, timeToLive: Long = 0, unordered: Boolean = false): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive, unordered), payload)
+    def apply(payload: Bytes, streamNumber: Int = 0, payloadProtocolID: Int = 0, timeToLive: Long = 0, unordered: Boolean = false): SctpMessage = new SctpMessage(SctpMessageInfo(streamNumber, payloadProtocolID, timeToLive, unordered), payload)
   }
 
   final case class SctpMessageInfo(streamNumber: Int, payloadProtocolID: Int, timeToLive: Long, unordered: Boolean, bytes: Int, association: SctpAssociation, address: InetSocketAddress) {
@@ -522,7 +522,7 @@ object Sctp extends ExtensionId[SctpExt] with ExtensionIdProvider {
     }
   }
 
-  case class SendFailedNotification(payload: ByteString, streamNumber: Int, errorCode: Int, address: InetSocketAddress) extends Notification
+  case class SendFailedNotification(payload: Bytes, streamNumber: Int, errorCode: Int, address: InetSocketAddress) extends Notification
 
 }
 

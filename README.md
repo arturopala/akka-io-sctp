@@ -48,7 +48,7 @@ The design of SCTP includes appropriate congestion avoidance behavior and resist
 Add to ```build.sbt``` file:
 
     resolvers += Resolver.jcenterRepo
-    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.7.1")
+    libraryDependencies ++= Seq("me.arturopala" %% "akka-io-sctp" % "0.8")
 
 ## Usage
 
@@ -130,7 +130,7 @@ Whenever SCTP message is read from a socket it will be transferred within this c
 ```scala
 case class Received(message: SctpMessage)
 
-case class SctpMessage(info: SctpMessageInfo, payload: ByteString)
+case class SctpMessage(info: SctpMessageInfo, payload: Bytes)
 case class SctpMessageInfo(streamNumber: Int, payloadProtocolID: Int, timeToLive: Long, unordered: Boolean, bytes: Int, association: SctpAssociation, address: InetSocketAddress)
 case class SctpAssociation(id: Int, maxInboundStreams: Int, maxOutboundStreams: Int)
 ```
